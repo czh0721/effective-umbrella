@@ -165,7 +165,7 @@
       const coins = Number(data.coins) || 0;
       const low = cost > 0 && balance < cost * 5;
       const pct = Math.max(0, Math.min(100, Math.round((Number(data.remaining_ratio) || 0) * 100)));
-      const cap = Number((data.summary || {}).granted) || 0;
+      const cap = Number((data.summary || {}).cycle_granted) || Number((data.summary || {}).granted) || 0;
       const note = !data.platform_ready ? "平台模型未启用"
         : (cost > 0 ? "每轮消耗 " + cost + " 积分" : "当前免费");
       const quota = cap > 0 && cap >= balance ? balance + " / " + cap : pct + "%";
@@ -285,9 +285,10 @@
       const data = lastCredits || {};
       const coin = kind === "coin";
       const stats = (coin ? data.coins_summary : data.summary) || {};
+      const expired = Number(stats.expired) || 0;
       const summary = coin
         ? `当前 ${data.coins || 0} · 累计获得 ${stats.granted || 0} · 已使用 ${stats.used || 0}`
-        : `剩余 ${data.balance || 0} · 累计获得 ${stats.granted || 0} · 已使用 ${stats.used || 0}`;
+        : `剩余 ${data.balance || 0} · 本轮额度 ${stats.cycle_granted || data.balance || 0} · 累计获得 ${stats.granted || 0} · 已使用 ${stats.used || 0}` + (expired > 0 ? ` · 已过期 ${expired}` : "");
       openModal(
         coin ? "念念币明细" : "积分明细",
         `<div class="mini" style="margin-bottom:10px">${escapeHtml(summary)}</div>

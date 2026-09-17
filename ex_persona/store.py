@@ -19,6 +19,8 @@ log = logging.getLogger("ex_persona.store")
 
 # 到期清零流水的固定标识，供统计与前端区分展示。
 EXPIRE_REASON = "积分到期清零"
+# 有效期机制上线时的一次性历史余额清空流水；既非用户消耗，也不算到期。
+MIGRATION_CLEAR_REASON = "历史余额清空（有效期机制上线）"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -530,7 +532,7 @@ def _migrate_credit_expiry(conn: sqlite3.Connection) -> None:
         conn.execute(
             "INSERT INTO credit_ledger (user_id, delta, balance_after, reason, actor,"
             " ref, created_at) VALUES (?, ?, 0, ?, 'system', ?, ?)",
-            (int(row["id"]), -balance, "历史余额清空（有效期机制上线）",
+            (int(row["id"]), -balance, MIGRATION_CLEAR_REASON,
              "credit-expiry-migration", now),
         )
     _meta_set(conn, "credit_expiry_migrated", "1")
@@ -2455,15 +2457,24 @@ def credits_summary(user_id: int) -> dict:
             " WHERE user_id = ? AND remaining > 0 AND expired_at = ''",
             (int(user_id),),
         ).fetchone()
+        cycle = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) AS n FROM credit_batches"
+            " WHERE user_id = ? AND expired_at = ''",
+            (int(user_id),),
+        ).fetchone()
     balance = int(user["credits"]) if user is not None else 0
     expired = sum(-int(item["delta"]) for item in rows
-                  if int(item["delta"]) < 0 and item["reason"] == EXPIRE_REASON)
+                  if int(item["delta"]) < 0
+                  and item["reason"] in (EXPIRE_REASON, MIGRATION_CLEAR_REASON))
     used = sum(-int(item["delta"]) for item in rows
-               if int(item["delta"]) < 0 and item["reason"] != EXPIRE_REASON)
+               if int(item["delta"]) < 0
+               and item["reason"] not in (EXPIRE_REASON, MIGRATION_CLEAR_REASON))
     granted = sum(int(item["delta"]) for item in rows if int(item["delta"]) > 0)
-    # 以“累计获得”为分母计算剩余比例：管理员扣减与聊天消耗都会降低剩余比例，
-    # 同时兼容历史数据（无流水但账户有余额）的情况。
-    total = max(granted, used + expired + balance)
+    # 剩余比例以「当前仍有效的批次总额」为分母：累计获得会把升级前清空的历史额度
+    # 一直算进来，导致余额被严重稀释（例如 400/52102）。有效批次清空后重新发放，
+    # 比例回到 100%，更贴近用户对「这轮还剩多少」的直觉。
+    cycle_total = int(cycle["n"] or 0)
+    total = max(cycle_total, balance)
     remaining = (balance / total) if total > 0 else 0.0
     ratio = (1 - remaining) if total > 0 else 0.0
     return {
@@ -2473,6 +2484,7 @@ def credits_summary(user_id: int) -> dict:
         "expired": expired,
         "ratio": round(ratio, 4),
         "remaining_ratio": round(remaining, 4),
+        "cycle_granted": cycle_total,
         "expiring_soon": int(batch["soon_total"] or 0),
         "next_expiry": upcoming["next_expiry"] or "",
         "batch_balance": int(live["n"] or 0),

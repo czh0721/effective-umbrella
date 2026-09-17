@@ -117,6 +117,26 @@ class CreditBatchTest(unittest.TestCase):
         self.assertEqual(summary["expiring_soon"], 0)
         self.assertTrue(summary["next_expiry"])
 
+    def test_ratio_ignores_expired_and_historical_grants(self):
+        user = self._user("batch-ratio-live")
+        store.grant_credits(user["id"], 100, expires_days=30)
+        store.expire_credit_batches((datetime.now().astimezone() + timedelta(days=31)).isoformat())
+        store.grant_credits(user["id"], 40, expires_days=90)
+        summary = store.credits_summary(user["id"])
+        self.assertEqual(summary["balance"], 40)
+        self.assertEqual(summary["cycle_granted"], 40)
+        self.assertEqual(summary["expired"], 100)
+        self.assertAlmostEqual(summary["remaining_ratio"], 1.0, places=3)
+
+    def test_migration_clear_counts_as_expired_not_used(self):
+        user = self._user("batch-migration-usage")
+        store.grant_credits(user["id"], 50, reason="gift")
+        store.grant_credits(user["id"], -50, reason=store.MIGRATION_CLEAR_REASON)
+        summary = store.credits_summary(user["id"])
+        self.assertEqual(summary["balance"], 0)
+        self.assertEqual(summary["used"], 0)
+        self.assertEqual(summary["expired"], 50)
+
     def test_remind_once_within_window(self):
         user = self._user("batch-remind")
         store.grant_credits(user["id"], 30, expires_days=30)
