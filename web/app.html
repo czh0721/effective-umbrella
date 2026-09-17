@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>我的分身 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+</head>
+<body>
+  <div class="topbar">
+    <span class="tb-logo">念</span>
+    <span class="tb-word"><b>念念</b><small>Nian</small></span>
+  </div>
+
+  <div class="shell">
+    <div id="noticeBar"></div>
+    <div class="stat3 block stagger" id="statStrip"></div>
+    <section class="glass card credit-card block stagger" id="creditCard"></section>
+    <div id="agentList" class="agent-list stagger"></div>
+
+    <button class="btn primary wide" id="createBtn" style="margin:6px 0 16px">＋ 创建新分身</button>
+
+    <div class="g flowline"><div class="n">1</div><div class="flex1"><b>上传聊天记录</b><div class="mini">微信 / QQ 导出文件直接拖入</div></div></div>
+    <div class="g flowline"><div class="n">2</div><div class="flex1"><b>AI 自动蒸馏人格</b><div class="mini">约 1 分钟生成人格档案</div></div></div>
+    <div class="g flowline"><div class="n">3</div><div class="flex1"><b>绑定微信开始聊天</b><div class="mini">扫码托管，安全防封</div></div></div>
+
+    <div class="slogan">念念 · 想 ta 的时候，念念就好</div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    let state = { personas: [], presets: [], user: {} };
+
+    function initials(name) { return escapeHtml((name || "?").slice(0, 1)); }
+    function gradientFor(id) {
+      const palettes = [
+        "linear-gradient(145deg,#f472b6,#ec4899)",
+        "linear-gradient(145deg,#a78bfa,#7c5cff)",
+        "linear-gradient(145deg,#7c5cff,#9b7bff)",
+        "linear-gradient(145deg,#38bdf8,#3d8bff)",
+        "linear-gradient(145deg,#34d399,#28c46c)",
+      ];
+      return palettes[Number(id || 0) % palettes.length];
+    }
+
+    function card(persona, index) {
+      const active = !!persona.is_active;
+      const activeBadge = active ? '<span class="badge b-vip">当前使用</span>' : "";
+      let badge = '<span class="badge b-off">未绑定</span>';
+      let sub = persona.tag || persona.target_name || "还没有标签";
+      if (active && persona.wechat_running) { badge = '<span class="badge b-ok">运行中</span>'; sub = "微信已绑定 · 自动回复中"; }
+      else if (active && persona.wechat_bound) { badge = '<span class="badge b-off">已绑定</span>'; sub = "微信已绑定 · 未在线"; }
+      else if (persona.wechat_bound) { badge = '<span class="badge b-off">已绑定</span>'; sub = "微信由当前使用的人格回复"; }
+      else if (!active) { sub = "切换为当前使用后由 ta 回复微信"; }
+      return `<section class="glass agent-card fade-in${active ? " active" : ""}" style="--i:${index}" data-id="${persona.id}">
+        <div class="head">
+          <div class="avatar" style="background:${gradientFor(persona.id)}">${initials(persona.name)}</div>
+          <div class="flex1">
+            <div class="row" style="gap:8px"><b style="font-size:15.5px">${escapeHtml(persona.name)}</b>${activeBadge}${badge}</div>
+            <div class="mini">${escapeHtml(sub)}</div>
+          </div>
+          <span class="chevron">›</span>
+        </div>
+      </section>`;
+    }
+
+    function renderStats() {
+      const active = state.personas.find((p) => p.is_active);
+      const online = active && active.wechat_running ? 1 : 0;
+      const bound = active && active.wechat_bound ? 1 : 0;
+      $("statStrip").innerHTML = `
+        <div><b data-count="${state.personas.length}">0</b><span>分身</span></div>
+        <div><b data-count="${online}">0</b><span>微信在线</span></div>
+        <div><b data-count="${bound}">0</b><span>已绑定</span></div>`;
+      animateCounts($("statStrip"));
+    }
+
+    function renderCredits(credits, platformReady) {
+      const data = credits || { balance: 0, used: 0, granted: 0, ratio: 0, remaining_ratio: 0, per_turn_cost: 0, coins: 0 };
+      const cost = Number(data.per_turn_cost) || 0;
+      const balance = Number(data.balance) || 0;
+      const used = Number(data.used) || 0;
+      const granted = Number(data.granted) || 0;
+      const coins = Number(data.coins) || 0;
+      const turns = cost > 0 ? Math.floor(balance / cost) : 0;
+      const percent = Math.round(Math.max(0, Math.min(1, Number(data.remaining_ratio) || 0)) * 100);
+      const fmt = (value) => Number(value || 0).toLocaleString("zh-CN");
+      let note;
+      if (platformReady === false) note = "平台模型未启用";
+      else if (cost > 0) note = "每轮 " + cost + " 积分 · 约可聊 " + fmt(turns) + " 轮";
+      else note = "当前免费";
+      const low = cost > 0 && balance < cost * 5;
+      const soon = Number(data.expiring_soon) || 0;
+      const nextExpiry = (data.next_expiry || "").slice(0, 10);
+      const expiryHtml = soon > 0
+        ? `<div class="mini" style="color:var(--orange)">${escapeHtml(nextExpiry)} 即将清零 ${fmt(soon)} 积分</div>`
+        : (nextExpiry ? `<div class="mini" style="color:var(--text-2)">最近到期 ${escapeHtml(nextExpiry)}</div>` : "");
+      $("creditCard").innerHTML = `
+        ${creditRing(percent / 100, { label: percent + "%", sub: "剩余" })}
+        <div class="credit-meta">
+          <div class="cm-row"><span><b>${fmt(balance)}</b>剩余积分</span><span><b>${fmt(coins)}</b>念念币</span></div>
+          <div class="mini"${low ? ' style="color:var(--orange)"' : ""}>${escapeHtml(note)}</div>
+          <div class="mini" style="color:var(--text-2)">已用 ${fmt(used)} · 累计获得 ${fmt(granted)}</div>
+          ${expiryHtml}
+        </div>`;
+      $("creditCard").style.cursor = "pointer";
+      $("creditCard").onclick = () => { window.location.href = "/app/settings"; };
+    }
+
+    function renderNotice(data) {
+      const host = $("noticeBar");
+      const cfg = data.config || {};
+      const credits = data.credits || {};
+      const cost = Number(credits.per_turn_cost) || 0;
+      const balance = Number(credits.balance) || 0;
+      const notes = [];
+      if (cfg.platform_available === false && !cfg.has_key) {
+        notes.push({ tone: "warn", text: "平台模型尚未启用，分身暂时无法回复。",
+          action: { label: "查看设置", href: "/app/settings" } });
+      }
+      if (cost > 0 && balance <= 0) {
+        notes.push({ tone: "danger", text: "积分已用完，分身将无法回复。",
+          action: { label: "去兑换", href: "/app/settings" } });
+      } else if (cost > 0 && balance < cost * 5) {
+        notes.push({ tone: "warn", text: "积分不足，仅够约 " + Math.floor(balance / cost) + " 轮回复。",
+          action: { label: "去兑换", href: "/app/settings" } });
+      }
+      const soon = Number(credits.expiring_soon) || 0;
+      if (soon > 0) {
+        notes.push({ tone: "warn", text: soon + " 积分将在 " + String(credits.next_expiry || "").slice(0, 10) + " 到期清零。",
+          action: { label: "去查看", href: "/app/settings" } });
+      }
+      const unbound = state.personas.find((p) => !p.wechat_bound);
+      if (unbound) {
+        notes.push({ tone: "info", text: "还没有绑定微信，扫码后 ta 才能收到消息。",
+          action: { label: "去绑定", href: "/app/agent/" + unbound.id } });
+      }
+      if (!notes.length) { host.innerHTML = ""; return; }
+      host.innerHTML = notes.map((n) => `<div class="glass card notice ${n.tone}">
+        <div class="notice-head">${icon("warning")}<span>${escapeHtml(n.text)}</span></div>
+        ${n.action ? `<div class="notice-foot"><a class="btn small primary" href="${n.action.href}">${escapeHtml(n.action.label)}</a></div>` : ""}
+      </div>`).join("");
+    }
+
+    function render() {
+      const host = $("agentList");
+      const hasPersonas = state.personas.length > 0;
+      $("createBtn").style.display = hasPersonas ? "" : "none";
+      if (!hasPersonas) {
+        host.innerHTML = `<section class="glass card empty-state">
+          <div class="big">${icon("spark")}</div>
+          <div class="t">还没有分身</div>
+          <div>蒸馏一个真人、自己写一个，或从市场挑一个</div>
+          <div class="btnrow" style="justify-content:center"><button class="btn primary" id="emptyCreate">创建分身</button></div>
+        </section>`;
+        $("emptyCreate").onclick = showCreateMenu;
+        return;
+      }
+      host.innerHTML = state.personas.map(card).join("");
+      host.querySelectorAll("[data-id]").forEach((node) => {
+        node.onclick = () => { window.location.href = "/app/agent/" + node.dataset.id; };
+      });
+    }
+
+    async function load() {
+      $("agentList").innerHTML = skeletonCards(3);
+      const data = await me();
+      state = { personas: data.personas, presets: data.presets || [], user: data.user };
+      renderStats();
+      renderCredits(data.credits, (data.config || {}).platform_available);
+      renderNotice(data);
+      render();
+      applyCreateIntent();
+    }
+
+    let createIntentUsed = false;
+    function applyCreateIntent() {
+      if (createIntentUsed) return;
+      const mode = new URLSearchParams(location.search).get("create");
+      if (!mode) return;
+      createIntentUsed = true;
+      if (mode === "blank") showEditForm();
+      else if (mode === "market") chooseMarket();
+      else showCreateMenu();
+    }
+
+    function showCreateMenu() {
+      openSheet("创建新分身", "选择一种创建方式", `
+        <div class="option-list">
+          <button class="option-card" data-mode="distill">
+            <div class="icon">${icon("spark")}</div>
+            <div><div class="t">AI 蒸馏复刻一个人</div><div class="d">上传微信 / 抖音 / QQ 聊天记录，自动生成人设</div></div>
+          </button>
+          <button class="option-card" data-mode="blank">
+            <div class="icon">${icon("edit")}</div>
+            <div><div class="t">自己编写人设</div><div class="d">先取个名字，进入工作台再慢慢完善</div></div>
+          </button>
+          <button class="option-card" data-mode="market">
+            <div class="icon">${icon("store")}</div>
+            <div><div class="t">市场</div><div class="d">选一个预置角色，开箱即用</div></div>
+          </button>
+        </div>`, (body, mask) => {
+        body.querySelectorAll("[data-mode]").forEach((button) => {
+          button.onclick = () => {
+            const mode = button.dataset.mode;
+            closeModal(mask);
+            if (mode === "distill") window.location.href = "/app/create/distill";
+            else if (mode === "blank") showEditForm();
+            else chooseMarket();
+          };
+        });
+      });
+    }
+
+    function showEditForm() {
+      openModal("给 ta 取个名字", `
+        <div class="sub">先取个名字，创建后进入工作台继续完善人设。</div>
+        <div class="field"><label>名字 *</label><input id="fName" placeholder="例如：小鹿" /></div>
+        <div class="btnrow"><button class="btn primary wide" id="fSubmit">创建并进入</button></div>`,
+        (body, mask) => {
+          body.querySelector("#fName").focus();
+          let busy = false;
+          const go = async () => {
+            if (busy) return;
+            const name = body.querySelector("#fName").value.trim();
+            if (!name) { toast("请先取个名字"); return; }
+            const button = body.querySelector("#fSubmit");
+            busy = true;
+            button.disabled = true;
+            try {
+              const detail = await api("/api/personas", { method: "POST", body: JSON.stringify({ name }) });
+              closeModal(mask);
+              window.location.href = "/app/agent/" + detail.persona.id;
+            } catch (error) { busy = false; toast(error.message); button.disabled = false; }
+          };
+          body.querySelector("#fSubmit").onclick = go;
+          body.querySelector("#fName").addEventListener("keydown", (event) => {
+            if (event.key === "Enter") go();
+          });
+        });
+    }
+
+    function chooseMarket() {
+      const cards = state.presets.map((preset) => `
+        <div class="preset-card" data-id="${preset.id}">
+          <div class="n">${escapeHtml(preset.name)}</div>
+          <div class="d">${escapeHtml(preset.tagline)}</div>
+          <div class="chip-list" style="margin-top:9px">${preset.tags.map((t) => `<span class="tag-chip">${escapeHtml(t)}</span>`).join("")}</div>
+        </div>`).join("");
+      openSheet("市场预置角色", "选一个角色，立即创建", `<div class="preset-grid">${cards}</div>`,
+        (body) => {
+          let picked = false;
+          body.querySelectorAll("[data-id]").forEach((node) => {
+            node.onclick = async () => {
+              if (picked) return;
+              picked = true;
+              node.style.pointerEvents = "none";
+              try {
+                const detail = await api("/api/personas/from-preset", {
+                  method: "POST",
+                  body: JSON.stringify({ preset_id: node.dataset.id }),
+                });
+                window.location.href = "/app/agent/" + detail.persona.id;
+              } catch (error) { picked = false; node.style.pointerEvents = ""; toast(error.message); }
+            };
+          });
+        });
+    }
+
+    $("createBtn").onclick = showCreateMenu;
+    mountTabbar("/app");
+    load().catch((error) => toast(error.message));
+    mountNotifications();
+  </script>
+</body>
+</html>

@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>念念 Nian · 把想念的人，做成会聊天的 AI</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <style>
+    /* 落地页专属：雾 Glass 背景、营销版式与动效（不覆盖全站组件） */
+    .bg-stage { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+    .bg-mesh { position: absolute; border-radius: 50%; filter: blur(90px); mix-blend-mode: multiply; will-change: transform; }
+    .bg-mesh.m1 { width: 55vw; height: 55vw; min-width: 340px; min-height: 340px; background: radial-gradient(circle, #b3a3ff, transparent 68%); top: -18%; left: 6%; opacity: .5; animation: drift1 26s ease-in-out infinite; }
+    .bg-mesh.m2 { width: 42vw; height: 42vw; min-width: 280px; min-height: 280px; background: radial-gradient(circle, #a9ccff, transparent 68%); top: 28%; right: -14%; opacity: .36; animation: drift2 32s ease-in-out infinite; }
+    .bg-mesh.m3 { width: 38vw; height: 38vw; min-width: 260px; min-height: 260px; background: radial-gradient(circle, #ffc2dd, transparent 68%); bottom: -12%; left: 16%; opacity: .34; animation: drift3 30s ease-in-out infinite; }
+    @keyframes drift1 { 0%, 100% { transform: translate(0, 0) scale(1); } 50% { transform: translate(5vw, 4vh) scale(1.12); } }
+    @keyframes drift2 { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-4vw, 7vh) scale(.9); } }
+    @keyframes drift3 { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(4vw, -5vh) scale(1.08); } }
+    .bg-noise { position: absolute; inset: 0; opacity: .028; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+    .page { position: relative; z-index: 1; min-height: 100vh; max-width: 560px; margin: 0 auto; padding: 0 18px 40px; }
+
+    .navbar { position: sticky; top: 0; z-index: 100; background: rgba(236, 238, 245, .66); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); border-bottom: 1px solid rgba(255, 255, 255, .5); transition: box-shadow .3s; }
+    .navbar.scrolled { box-shadow: 0 8px 30px -16px rgba(70, 60, 140, .3); }
+    .nav-in { max-width: 560px; margin: 0 auto; padding: 12px 18px; display: flex; align-items: center; gap: 11px; min-height: 58px; }
+    .logo { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 17px; letter-spacing: -.3px; color: var(--ink); }
+    .logo .mk { width: 32px; height: 32px; border-radius: 10px; background: linear-gradient(145deg, #7c5cff, #9b7bff); display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px -2px rgba(124, 92, 255, .6), inset 0 1px 0 rgba(255, 255, 255, .5); color: #fff; font-size: 14px; }
+    .nav-sp { flex: 1; }
+    .btn-sm { font-size: 12.5px; padding: 8px 14px; border-radius: 100px; }
+
+    .landing-hero { position: relative; text-align: center; padding: 60px 0 30px; }
+    .starfield { position: absolute; left: 50%; top: 0; transform: translateX(-50%); width: min(760px, 118vw); height: 600px; z-index: 0; pointer-events: none; -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 42%, #000 55%, transparent 100%); mask-image: radial-gradient(ellipse 70% 70% at 50% 42%, #000 55%, transparent 100%); }
+    .landing-hero .hin { position: relative; z-index: 2; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; background: linear-gradient(180deg, rgba(255, 255, 255, .88), rgba(255, 255, 255, .55)); border: 1px solid #fff; border-radius: 100px; padding: 7px 15px; font-size: 12.5px; font-weight: 600; color: var(--v); box-shadow: 0 8px 20px -10px rgba(124, 92, 255, .4); margin-bottom: 22px; }
+    .h1 { font-size: clamp(32px, 6vw, 46px); font-weight: 800; letter-spacing: -1.5px; line-height: 1.14; margin-bottom: 18px; }
+    .landing-hero .lead { font-size: 16px; color: var(--text-2); max-width: 540px; margin: 0 auto 28px; line-height: 1.7; }
+    .cta-row { display: flex; gap: 13px; justify-content: center; flex-wrap: wrap; margin-bottom: 44px; }
+    .cta-main { font-size: 16px; padding: 16px 32px; }
+    .cta-sub { font-size: 16px; padding: 15px 28px; }
+    .preview { max-width: 388px; margin: 0 auto; perspective: 1200px; }
+    .phone { border-radius: 32px; padding: 18px 16px; text-align: left; transform: rotateX(6deg); }
+    .p-head { display: flex; align-items: center; gap: 10px; padding-bottom: 13px; border-bottom: 1px solid var(--hairline); margin-bottom: 14px; }
+    .p-ava { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(145deg, #f472b6, #ec4899); }
+    .p-head b { font-size: 15px; display: block; }
+    .p-head .st { font-size: 11.5px; color: var(--green); display: flex; align-items: center; gap: 5px; }
+    .typing { display: inline-flex; gap: 5px; padding: 12px 15px; background: rgba(118, 118, 128, .13); border-radius: 19px; border-bottom-left-radius: 6px; opacity: 0; }
+    .typing.show { opacity: 1; }
+    .typing i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); animation: tp 1.3s infinite; }
+    .typing i:nth-child(2) { animation-delay: .18s; }
+    .typing i:nth-child(3) { animation-delay: .36s; }
+    @keyframes tp { 0%, 60%, 100% { transform: none; opacity: .4; } 30% { transform: translateY(-5px); opacity: 1; } }
+    .bubble { opacity: 0; transform: translateY(12px) scale(.96); }
+    .bubble.show { animation: bIn .5s var(--sp, cubic-bezier(.22, 1.2, .36, 1)) forwards; }
+    @keyframes bIn { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }
+    @keyframes pulse { 70% { box-shadow: 0 0 0 7px rgba(40, 196, 108, 0); } 100% { box-shadow: 0 0 0 0 rgba(40, 196, 108, 0); } }
+    .grad-text { background: linear-gradient(110deg, #7c5cff, #3d8bff 55%, #f06595); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; animation: gradShine 6s linear infinite; }
+    @keyframes gradShine { to { background-position: 200% 0; } }
+
+    section { padding: 50px 0; position: relative; }
+    .sec-kicker { font-size: 11px; font-weight: 800; letter-spacing: 1.4px; color: var(--v); text-transform: uppercase; }
+    .sec-title { text-align: center; font-size: clamp(24px, 4vw, 30px); font-weight: 800; letter-spacing: -.8px; margin: 10px 0 11px; }
+    .sec-sub { text-align: center; font-size: 15px; color: var(--text-2); max-width: 500px; margin: 0 auto 34px; }
+    .center { text-align: center; }
+    .feats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
+    .feat { border-radius: 24px; padding: 23px 20px; transition: transform .3s var(--eo); }
+    .f-ico { width: 46px; height: 46px; border-radius: 14px; display: flex; align-items: center; justify-content: center; margin-bottom: 15px; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7); }
+    .feat h3 { font-size: 16.5px; font-weight: 700; margin-bottom: 6px; }
+    .feat p { font-size: 13px; color: var(--text-2); line-height: 1.6; }
+    .steps { display: flex; flex-direction: column; gap: 14px; max-width: 640px; margin: 0 auto; }
+    .step { display: flex; gap: 16px; align-items: flex-start; }
+    .sn { width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(135deg, #7c5cff, #9b7bff); color: #fff; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 18px -4px rgba(124, 92, 255, .55); z-index: 1; }
+    .sbody { flex: 1; border-radius: 20px; padding: 18px 20px; }
+    .sbody h3 { font-size: 16px; font-weight: 700; margin-bottom: 5px; }
+    .sbody p { font-size: 13.5px; color: var(--text-2); line-height: 1.6; }
+    .roles { display: flex; gap: 14px; overflow-x: auto; padding: 6px 2px 14px; scrollbar-width: none; }
+    .roles::-webkit-scrollbar { display: none; }
+    .role { flex-shrink: 0; width: 138px; border-radius: 22px; padding: 20px 14px; text-align: center; transition: transform .25s var(--spring, cubic-bezier(.22, 1.2, .36, 1)); cursor: pointer; }
+    .role:active { transform: scale(.95); }
+    .r-ava { width: 60px; height: 60px; border-radius: 20px; margin: 0 auto 11px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 22px; font-weight: 700; }
+    .role b { font-size: 15px; display: block; margin-bottom: 3px; }
+    .role span { font-size: 11.5px; color: var(--text-3); }
+    .final { border-radius: 32px; padding: 48px 28px; text-align: center; color: #fff; background: linear-gradient(140deg, #6d4dff, #8b5cf6 45%, #b07bff); box-shadow: 0 30px 60px -20px rgba(124, 92, 255, .65); position: relative; overflow: hidden; }
+    .final::before { content: ''; position: absolute; inset: 0; background: radial-gradient(circle at 18% -10%, rgba(255, 255, 255, .35), transparent 45%), radial-gradient(circle at 90% 110%, rgba(255, 255, 255, .2), transparent 45%); }
+    .final > * { position: relative; z-index: 1; }
+    .final h2 { font-size: 27px; font-weight: 800; margin-bottom: 10px; }
+    .final p { opacity: .92; margin-bottom: 26px; }
+    .final .btn { background: #fff; color: #6d31e8; font-size: 16px; padding: 15px 34px; }
+    .site-footer { text-align: center; padding: 40px 0 46px; color: var(--text-3); font-size: 12.5px; line-height: 2.1; }
+    .progress { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 200; background: linear-gradient(90deg, #7c5cff, #3d8bff, #f06595); }
+
+    .rv { opacity: 0; transform: translateY(30px); filter: blur(6px); transition: opacity .75s var(--eo), transform .75s var(--eo), filter .75s var(--eo); }
+    .rv.in { opacity: 1; transform: none; filter: blur(0); }
+    html.q1 .bg-mesh { animation: none; }
+    html.q1 .grad-text { animation: none; -webkit-text-fill-color: #7c5cff; }
+    html.q1 .rv { filter: none; }
+    html.q0 .bg-stage { display: none; }
+    html.q0 .rv { filter: none; opacity: 1; transform: none; }
+    @media (max-width: 560px) { .bg-mesh { filter: blur(60px); } .feats { grid-template-columns: 1fr; } .landing-hero { padding-top: 44px; } .starfield { height: 500px; } }
+    @media (prefers-reduced-motion: reduce) { .bg-mesh, .grad-text, .live-dot, .typing i { animation: none !important; } }
+  </style>
+</head>
+<body>
+  <div class="progress" id="progress"></div>
+  <div class="bg-stage" aria-hidden="true"><div class="bg-mesh m1"></div><div class="bg-mesh m2"></div><div class="bg-mesh m3"></div><div class="bg-noise"></div></div>
+
+  <div class="navbar"><div class="nav-in">
+    <a class="logo" href="/"><span class="mk">念</span>念念</a>
+    <span class="nav-sp"></span>
+    <a class="btn ghost btn-sm" href="/login">登录</a>
+    <a class="btn primary btn-sm" href="/app">进入平台</a>
+  </div></div>
+
+  <div class="page">
+    <div class="landing-hero">
+      <canvas class="starfield" id="stars" aria-hidden="true"></canvas>
+      <div class="hin">
+        <div class="pill rv"><span class="live-dot"></span>AI 人设聊天平台 · 微信自动回复</div>
+        <h1 class="h1 rv">把想念的人<br />做成<span class="grad-text">会聊天的 AI</span></h1>
+        <p class="lead rv">上传你们的聊天记录，念念会蒸馏出 TA 的说话风格与人格，绑定微信后，就能像真人一样替你回复消息、主动关心你。</p>
+        <div class="cta-row rv">
+          <a class="btn primary cta-main" href="/login"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>免费创建分身</a>
+          <button class="btn ghost cta-sub" id="demoBtn" type="button">观看演示</button>
+        </div>
+        <div class="preview rv">
+          <div class="phone g">
+            <div class="p-head"><div class="p-ava" style="display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">鹿</div><div><b>小鹿</b><div class="st">微信在线</div></div><span class="nav-sp"></span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8e8e93" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></div>
+            <div class="bub me bubble" data-i="0">今天好累啊</div>
+            <div class="bub ta bubble" data-i="1">辛苦啦宝，先去喝口热水歇会儿～晚上想吃什么我给你点</div>
+            <div class="bub me bubble" data-i="2">还是你最懂我</div>
+            <div class="bub ta bubble" data-i="3">那当然，我可是最懂你的人呀</div>
+            <div class="typing" id="typing"><i></i><i></i><i></i></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <section>
+      <div class="sec-kicker center rv">核心能力</div>
+      <h2 class="sec-title rv">不只是聊天机器人</h2>
+      <p class="sec-sub rv">从真实聊天记录里长出来的人格，有记忆、有语气、有温度</p>
+      <div class="feats">
+        <div class="feat g rv" data-tilt><div class="f-ico" style="background:linear-gradient(145deg,#e7e0ff,#d8ccff)"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#7c5cff" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/></svg></div><h3>聊天记录蒸馏</h3><p>支持微信、QQ、短信等多种导出格式，自动解析并统计说话风格、口头禅、标点习惯</p></div>
+        <div class="feat g rv" data-tilt><div class="f-ico" style="background:linear-gradient(145deg,#ffe0ec,#ffd0e2)"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#f06595" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div><h3>人格精准复刻</h3><p>生成身份、性格、灵魂档案，配合真实对话检索，回复语气和本人几乎无二</p></div>
+        <div class="feat g rv" data-tilt><div class="f-ico" style="background:linear-gradient(145deg,#d6f7e4,#c2f0d4)"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#28c46c" stroke-width="2" stroke-linecap="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></div><h3>微信自动回复</h3><p>扫码绑定即可托管，拟人延迟、频率限制、敏感词过滤，安全防封号</p></div>
+        <div class="feat g rv" data-tilt><div class="f-ico" style="background:linear-gradient(145deg,#dcebff,#c8ddff)"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="#3d8bff" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 16 14"/></svg></div><h3>长期记忆</h3><p>按联系人独立记住你们聊过的事，越聊越懂你，还能在合适的时候主动找你</p></div>
+      </div>
+      <div class="stat3 rv" style="margin-top:28px;max-width:560px;margin-left:auto;margin-right:auto">
+        <div class="g"><b data-count="1284">0</b><span>真实语料蒸馏(条)</span></div>
+        <div class="g"><b data-count="96">0</b><span>人格还原度(%)</span></div>
+        <div class="g"><b data-count="24">0</b><span>小时在线陪伴</span></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-kicker center rv">三步上线</div>
+      <h2 class="sec-title rv">三分钟拥有你的 AI 分身</h2>
+      <p class="sec-sub rv">不用写代码，全程可视化操作</p>
+      <div class="steps">
+        <div class="step rv"><div class="sn">1</div><div class="sbody g"><h3>上传聊天记录</h3><p>把微信/QQ 导出的聊天记录文件直接拖进来，或手动填写人设信息，也能从角色市场挑选现成人格。</p></div></div>
+        <div class="step rv"><div class="sn">2</div><div class="sbody g"><h3>AI 自动蒸馏</h3><p>大模型分析语料，生成人格卡片、说话风格和真实回复样本，你可以随时微调每一个细节。</p></div></div>
+        <div class="step rv"><div class="sn">3</div><div class="sbody g"><h3>绑定微信开始聊天</h3><p>扫码登录微信账号，开启自动回复。支持发图片、发表情、主动消息，像真人一样自然。</p></div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-kicker center rv">角色市场</div>
+      <h2 class="sec-title rv">或者，从一个现成人格开始</h2>
+      <p class="sec-sub rv">精心调校的预置角色，一键创建即可使用</p>
+      <div class="roles rv">
+        <div class="role g" data-tilt data-go><div class="r-ava" style="background:linear-gradient(145deg,#f472b6,#ec4899)">晚</div><b>林晚</b><span>温柔治愈系</span></div>
+        <div class="role g" data-tilt data-go><div class="r-ava" style="background:linear-gradient(145deg,#fbbf24,#f59e0b)">柚</div><b>小柚</b><span>元气少女</span></div>
+        <div class="role g" data-tilt data-go><div class="r-ava" style="background:linear-gradient(145deg,#60a5fa,#3b82f6)">宅</div><b>阿宅</b><span>沙雕损友</span></div>
+        <div class="role g" data-tilt data-go><div class="r-ava" style="background:linear-gradient(145deg,#a78bfa,#7c5cff)">桃</div><b>桃桃</b><span>甜妹撒娇</span></div>
+        <div class="role g" data-tilt data-go><div class="r-ava" style="background:linear-gradient(145deg,#34d399,#10b981)">砚</div><b>沈砚</b><span>沉稳学长</span></div>
+      </div>
+    </section>
+
+    <section style="padding-bottom:20px">
+      <div class="final rv">
+        <h2>现在，就把 TA 留在身边</h2>
+        <p>想 ta 的时候，念念就好</p>
+        <a class="btn" href="/login">免费创建第一个分身</a>
+      </div>
+    </section>
+
+    <footer class="site-footer">
+      念念 Nian — 想 ta 的时候，念念就好<br />
+      <a href="/privacy">隐私政策</a> · <a href="/terms">服务条款</a> · 联系我们<br />
+      <span style="opacity:.7">© 2026 Nian. 仅供个人情感陪伴，请合法合规使用</span>
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+  <script>
+    const isTouch = matchMedia("(hover:none)").matches;
+    const reduceMotion = matchMedia("(prefers-reduced-motion:reduce)").matches;
+
+    /* 导航滚动阴影 */
+    (function navScroll() {
+      const nav = document.querySelector(".navbar");
+      if (!nav) return;
+      const on = () => nav.classList.toggle("scrolled", document.documentElement.scrollTop > 8);
+      addEventListener("scroll", on, { passive: true });
+      on();
+    })();
+
+    /* 入场：.rv 逐个揭示 */
+    (function reveal() {
+      const els = [...document.querySelectorAll(".rv:not(.in)")];
+      if (reduceMotion || !("IntersectionObserver" in window)) { els.forEach((el) => el.classList.add("in")); return; }
+      const io = new IntersectionObserver((list) => list.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const sibs = [...entry.target.parentElement.children].filter((c) => c.classList.contains("rv"));
+        entry.target.style.transitionDelay = Math.max(sibs.indexOf(entry.target), 0) * 0.07 + "s";
+        entry.target.classList.add("in");
+        io.unobserve(entry.target);
+      }), { threshold: .1 });
+      els.forEach((el) => io.observe(el));
+    })();
+
+    /* 玻璃卡光斑 + 3D 倾斜 */
+    (function glassFx() {
+      document.querySelectorAll(".g").forEach((card) => {
+        card.addEventListener("pointermove", (event) => {
+          const r = card.getBoundingClientRect();
+          card.style.setProperty("--mx", (event.clientX - r.left) + "px");
+          card.style.setProperty("--my", (event.clientY - r.top) + "px");
+          if (card.hasAttribute("data-tilt") && !isTouch) {
+            const rx = ((event.clientY - r.top) / r.height - .5) * -6;
+            const ry = ((event.clientX - r.left) / r.width - .5) * 6;
+            card.style.transform = `perspective(900px) rotateX(${rx}deg) rotateY(${ry}deg) translateY(-2px)`;
+          }
+        });
+        card.addEventListener("pointerleave", () => { card.style.transform = ""; });
+      });
+    })();
+
+    /* 数字滚动 */
+    (function countUp() {
+      const nodes = document.querySelectorAll("[data-count]");
+      if (reduceMotion || !("IntersectionObserver" in window)) {
+        nodes.forEach((el) => { el.textContent = Number(el.dataset.count).toLocaleString(); });
+        return;
+      }
+      const io = new IntersectionObserver((list) => list.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const el = entry.target, target = +el.dataset.count, t0 = performance.now();
+        (function tick(t) { const p = Math.min((t - t0) / 1300, 1); el.textContent = Math.round(target * (1 - Math.pow(1 - p, 3))).toLocaleString(); if (p < 1) requestAnimationFrame(tick); })(t0);
+        io.unobserve(el);
+      }), { threshold: .5 });
+      nodes.forEach((el) => io.observe(el));
+    })();
+
+    /* 自适应画质降级 */
+    (function adaptivePerf() {
+      if (reduceMotion) return;
+      let frames = 0, last = performance.now(), checks = 0, level = 2;
+      (function loop(now) {
+        frames++;
+        if (now - last >= 1000) {
+          const fps = frames * 1000 / (now - last); frames = 0; last = now; checks++;
+          if (checks && fps < 48 && level > 0) { level--; document.documentElement.classList.add(level === 1 ? "q1" : "q0"); }
+        }
+        requestAnimationFrame(loop);
+      })(performance.now());
+    })();
+
+    /* 环星呼吸粒子 + 对话循环 */
+    (function heroStars() {
+      const cv = document.getElementById("stars");
+      if (!cv) return;
+      const ctx = cv.getContext("2d");
+      let W, H, parts = [], sprites = [], core, raf = 0, inView = true, run = true, q = 2;
+      const COLORS = ["124,92,255", "61,139,255", "240,101,149", "155,123,255"];
+      const mk = (c) => { const s = document.createElement("canvas"); s.width = s.height = 64; const g = s.getContext("2d"); const r = g.createRadialGradient(32, 32, 0, 32, 32, 32); r.addColorStop(0, `rgba(${c},.95)`); r.addColorStop(.35, `rgba(${c},.4)`); r.addColorStop(1, `rgba(${c},0)`); g.fillStyle = r; g.fillRect(0, 0, 64, 64); return s; };
+      COLORS.forEach((c) => sprites.push(mk(c)));
+      core = (() => { const s = document.createElement("canvas"); s.width = s.height = 320; const g = s.getContext("2d"); const r = g.createRadialGradient(160, 160, 0, 160, 160, 160); r.addColorStop(0, "rgba(150,120,255,.55)"); r.addColorStop(.55, "rgba(150,120,255,.16)"); r.addColorStop(1, "rgba(150,120,255,0)"); g.fillStyle = r; g.fillRect(0, 0, 320, 320); return s; })();
+      function size() { const d = Math.min(devicePixelRatio || 1, 2), r = cv.getBoundingClientRect(); W = r.width; H = r.height; cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0); build(); }
+      function build() {
+        parts = []; const cx = W / 2, cy = H * .42, n = (isTouch ? 42 : 78) * (q === 1 ? .55 : 1);
+        [[W * .2, H * .16, n * .3, .16], [W * .31, H * .255, n * .34, -.11], [W * .42, H * .35, n * .36, .07]].forEach((rg, ri) => { for (let i = 0; i < rg[2]; i++) { const a = i / rg[2] * 6.283 + Math.random() * .4; parts.push({ d: 0, ring: ri, ang: a, rx: rg[0] * (.92 + Math.random() * .16), ry: rg[1] * (.92 + Math.random() * .16), spd: rg[3] * (.7 + Math.random() * .6), sz: 2.6 + Math.random() * 3.4, ci: Math.floor(Math.random() * 4), ph: Math.random() * 6.28, tw: 1.6 + Math.random() * 1.8, cx, cy }); } });
+        const dn = (isTouch ? 10 : 18) * (q === 1 ? .5 : 1); for (let i = 0; i < dn; i++) parts.push({ d: 1, x: Math.random() * W, y: Math.random() * H, vx: (Math.random() - .5) * .12, vy: -(.08 + Math.random() * .16), sz: 1.4 + Math.random() * 2.2, ci: Math.floor(Math.random() * 4), ph: Math.random() * 6.28, tw: 2 + Math.random() * 2 });
+      }
+      const t0 = performance.now();
+      function frame(now) {
+        if (!run || !inView) return;
+        const t = (now - t0) / 1000; ctx.clearRect(0, 0, W, H); const cx = W / 2, cy = H * .42;
+        const cr = .5 + .5 * Math.sin(t * .9), cs = 150 + cr * 40; ctx.globalAlpha = .55 + cr * .35; ctx.drawImage(core, cx - cs, cy - cs, cs * 2, cs * 2); ctx.globalAlpha = 1;
+        ctx.lineWidth = 1; [[W * .2, H * .16], [W * .31, H * .255], [W * .42, H * .35]].forEach((r) => { ctx.beginPath(); ctx.ellipse(cx, cy, r[0], r[1], 0, 0, 6.283); ctx.strokeStyle = "rgba(124,92,255,.055)"; ctx.stroke(); });
+        for (const p of parts) {
+          let x, y, al, sz;
+          if (p.d) { p.x += p.vx; p.y += p.vy; if (p.y < -10) p.y = H + 10; x = p.x; y = p.y; al = Math.max(0, (.3 + .5 * Math.sin(t * p.tw + p.ph)) * .5); sz = p.sz; }
+          else { p.ang += p.spd * .0032; const dep = .5 + .5 * Math.sin(p.ang); x = p.cx + Math.cos(p.ang) * p.rx; y = p.cy + Math.sin(p.ang) * p.ry; const tw = .45 + .55 * Math.sin(t * p.tw + p.ph), sc = .7 + dep * .6; al = Math.max(0, (.25 + tw * .55) * sc); sz = p.sz * sc * (.85 + .15 * Math.sin(t * .8 + p.ph)); }
+          ctx.globalAlpha = al; ctx.drawImage(sprites[p.ci], x - sz * 3, y - sz * 3, sz * 6, sz * 6);
+        }
+        ctx.globalAlpha = 1; raf = requestAnimationFrame(frame);
+      }
+      function start() { if (run && inView && !raf && q > 0) raf = requestAnimationFrame(frame); }
+      function stop() { if (raf) { cancelAnimationFrame(raf); raf = 0; } }
+      addEventListener("resize", size);
+      new IntersectionObserver((es) => { inView = es[0].isIntersecting; inView ? start() : stop(); }).observe(document.querySelector(".landing-hero"));
+      document.addEventListener("visibilitychange", () => document.hidden ? stop() : start());
+      new MutationObserver(() => { q = document.documentElement.classList.contains("q0") ? 0 : document.documentElement.classList.contains("q1") ? 1 : 2; if (q === 0) { cv.style.display = "none"; } else { build(); } }).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+      if (!reduceMotion) { size(); start(); } else size();
+    })();
+
+    (function conversation() {
+      const bs = [...document.querySelectorAll(".bubble")], ty = document.getElementById("typing");
+      if (!bs.length || !ty) return;
+      if (reduceMotion) { bs.forEach((b) => b.classList.add("show")); return; }
+      function play() {
+        bs.forEach((b) => b.classList.remove("show")); ty.classList.remove("show"); let i = 0;
+        (function next() {
+          if (i < bs.length) {
+            const b = bs[i];
+            if (b.classList.contains("ta")) { ty.classList.add("show"); setTimeout(() => { ty.classList.remove("show"); b.classList.add("show"); i++; setTimeout(next, 900); }, 900); }
+            else { b.classList.add("show"); i++; setTimeout(next, 700); }
+          } else setTimeout(play, 3600);
+        })();
+      }
+      play();
+    })();
+
+    /* 滚动进度 + 视差 + 演示按钮 + 角色卡片跳转 */
+    (function interactions() {
+      const prog = document.getElementById("progress"), hero = document.querySelector(".hin");
+      addEventListener("scroll", () => {
+        const h = document.documentElement;
+        prog.style.width = (h.scrollTop / (h.scrollHeight - h.clientHeight) * 100) + "%";
+        if (hero && !reduceMotion) { hero.style.transform = `translateY(${h.scrollTop * .1}px)`; hero.style.opacity = 1 - Math.min(h.scrollTop / 520, .35); }
+      }, { passive: true });
+      const demoBtn = document.getElementById("demoBtn");
+      if (demoBtn) demoBtn.onclick = () => {
+        document.querySelector(".preview").scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth" });
+        toast("这就是念念在微信里的回复效果");
+      };
+      document.querySelectorAll("[data-go]").forEach((el) => { el.onclick = () => { location.href = "/login"; }; });
+    })();
+  </script>
+</body>
+</html>

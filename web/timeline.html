@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>回忆时间线 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+</head>
+<body>
+  <div class="topbar">
+    <a class="icon-btn" href="/app" aria-label="返回">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </a>
+    <b style="font-size:14px">回忆时间线</b>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="speakAll" title="朗读告别信" aria-label="朗读" style="display:none">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9v6h3l4 4V5L7 9z"/><path d="M15 9a3 3 0 0 1 0 6"/><path d="M17.5 6.5a6 6 0 0 1 0 11"/></svg>
+    </button>
+  </div>
+
+  <div class="shell">
+    <div class="row block">
+      <h2 class="flex1" style="font-size:20px;font-weight:800">回忆时间线</h2>
+      <span class="badge b-ok" id="spanBadge">—</span>
+    </div>
+
+    <div class="seg block" id="personaTabs" style="display:none"></div>
+    <div class="seg block" id="contactTabs" style="display:none"></div>
+    <div class="mini" id="headSub" style="margin:2px 2px 12px">加载中…</div>
+
+    <div id="farewellBox"></div>
+    <div id="timelineList" class="stagger"></div>
+    <div class="slogan">念念 · 想 ta 的时候，念念就好</div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    let state = { personas: [], personaId: 0, contact: "", data: null };
+
+    function personaName(id) {
+      const p = state.personas.find((item) => item.id === id);
+      return p ? p.name : "Agent";
+    }
+    function contactLabel(contact) {
+      if (contact.display_name) return contact.display_name;
+      const key = contact.contact_key || "";
+      return key.length > 14 ? key.slice(0, 6) + "…" + key.slice(-4) : (key || "未知联系人");
+    }
+    function esc(text) { return escapeHtml(text || ""); }
+    function dayLabel(day) {
+      const parts = String(day || "").split("-");
+      return parts.length === 3 ? parts[1] + "月" + parts[2] + "日" : String(day || "");
+    }
+
+    function speak(text) {
+      if (!text) { toast("没有可朗读的内容"); return; }
+      if (!window.speechSynthesis) { toast("当前浏览器不支持语音朗读"); return; }
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "zh-CN";
+        utter.rate = 0.98;
+        window.speechSynthesis.speak(utter);
+      } catch (error) { toast("朗读失败"); }
+    }
+
+    function renderPersonaTabs() {
+      const tabs = $("personaTabs");
+      if (state.personas.length <= 1) { tabs.style.display = "none"; tabs.innerHTML = ""; return; }
+      tabs.style.display = "";
+      tabs.innerHTML = state.personas.map((p) =>
+        `<div class="${p.id === state.personaId ? "on" : ""}" data-pid="${p.id}">${esc(p.name)}</div>`
+      ).join("");
+      tabs.querySelectorAll("[data-pid]").forEach((btn) => {
+        btn.onclick = () => {
+          state.personaId = Number(btn.dataset.pid);
+          state.contact = "";
+          loadTimeline().catch((error) => toast(error.message || String(error)));
+        };
+      });
+    }
+
+    function renderContacts() {
+      const host = $("contactTabs");
+      const contacts = state.data.contacts || [];
+      if (!contacts.length) { host.style.display = "none"; host.innerHTML = ""; return; }
+      host.style.display = "";
+      const all = { contact_key: "", display_name: "全部" };
+      host.innerHTML = [all, ...contacts].map((c) => {
+        const active = c.contact_key === state.contact ? "on" : "";
+        return `<div class="${active}" data-contact="${esc(c.contact_key)}">${esc(contactLabel(c))}</div>`;
+      }).join("");
+      host.querySelectorAll("[data-contact]").forEach((btn) => {
+        btn.onclick = () => { state.contact = btn.dataset.contact; loadTimeline().catch((error) => toast(error.message || String(error))); };
+      });
+    }
+
+    function renderFarewell() {
+      const box = $("farewellBox");
+      const farewell = state.data.farewell;
+      if (!farewell) { box.innerHTML = ""; $("speakAll").style.display = "none"; return; }
+      $("speakAll").style.display = "";
+      $("speakAll").onclick = () => speak(farewell.content);
+      box.innerHTML = `<section class="glass card" style="border-left:4px solid var(--pink)">
+        <div class="k" style="color:var(--pink);font-size:11.5px;font-weight:700;letter-spacing:.12em">那封告别信</div>
+        <p class="muted" style="margin:9px 0 0;font-size:13px;white-space:pre-wrap">${esc(farewell.content)}</p>
+        <div class="mini" style="margin-top:8px">${fmtDate(farewell.created_at)}</div>
+      </section>`;
+    }
+
+    function buildEvents() {
+      const data = state.data || {};
+      const events = [];
+      const byDay = {};
+      (data.days || []).forEach((row) => {
+        const day = row.day;
+        byDay[day] = byDay[day] || { day, me: 0, ta: 0 };
+        if (row.role === "user") byDay[day].me += Number(row.n) || 0;
+        else byDay[day].ta += Number(row.n) || 0;
+      });
+      Object.values(byDay).forEach((item) => {
+        events.push({ at: item.day, kind: "day", me: item.me, ta: item.ta });
+      });
+      (data.memories || []).forEach((m) => {
+        events.push({ at: (m.created_at || "").slice(0, 10), kind: "memory", content: m.content, memKind: m.kind });
+      });
+      (data.proactive || []).forEach((p) => {
+        events.push({ at: (p.created_at || "").slice(0, 10), kind: "proactive", content: p.content, node: p.kind });
+      });
+      return events.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    }
+
+    function renderEvents() {
+      const host = $("timelineList");
+      const events = buildEvents();
+      if (!events.length) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("clock")}</div><div class="t">还没有回忆</div><div>收到消息、积累记忆后，这里会长出你们的时间线</div></section>`;
+        return;
+      }
+      const NODE_LABEL = { morning: "早安", goodnight: "晚安", anniversary: "纪念日", care: "想起了你" };
+      host.innerHTML = events.map((event) => {
+        if (event.kind === "day") {
+          return `<div class="tl-row">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <div class="tl-date">${esc(dayLabel(event.at))}</div>
+              <div class="mini">你发了 ${event.me} 条 · ta 回了 ${event.ta} 条</div>
+            </div>
+          </div>`;
+        }
+        if (event.kind === "memory") {
+          return `<div class="tl-row">
+            <div class="tl-dot mem"></div>
+            <div class="tl-card">
+              <div class="tl-date">${esc(dayLabel(event.at))} · 记住了</div>
+              <div class="tl-body">${esc(event.content)}</div>
+            </div>
+          </div>`;
+        }
+        const label = event.node ? (NODE_LABEL[event.node] || "主动消息") : "主动消息";
+        return `<div class="tl-row">
+          <div class="tl-dot ta"></div>
+          <div class="tl-card">
+            <div class="tl-date">${esc(dayLabel(event.at))} · ${esc(label)}</div>
+            <div class="tl-body">${esc(event.content)}</div>
+            <div class="btnrow" style="margin-top:8px;justify-content:flex-end">
+              <button class="btn small ghost" data-speak="${esc(event.content)}">朗读</button>
+            </div>
+          </div>
+        </div>`;
+      }).join("");
+      host.querySelectorAll("[data-speak]").forEach((btn) => {
+        btn.onclick = () => speak(btn.dataset.speak);
+      });
+    }
+
+    async function loadTimeline() {
+      const host = $("timelineList");
+      host.innerHTML = skeletonCards(3);
+      const query = state.contact ? "?contact=" + encodeURIComponent(state.contact) : "";
+      let data;
+      try {
+        data = await api(`/api/personas/${state.personaId}/timeline${query}`);
+      } catch (error) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("warning")}</div><div class="t">加载失败</div><div>${esc(error.message || "请稍后重试")}</div></section>`;
+        return;
+      }
+      state.data = data;
+      const span = data.first_at && data.last_at ? (String(data.first_at).slice(0, 10) + " 至今") : "还没有对话";
+      $("spanBadge").textContent = span;
+      $("headSub").textContent = `${personaName(state.personaId)} · 共 ${data.total} 轮对话 · ${(data.memories || []).length} 条记忆`;
+      $("speakAll").style.display = "none";
+      renderPersonaTabs();
+      renderContacts();
+      renderFarewell();
+      renderEvents();
+    }
+
+    async function load() {
+      const data = await me();
+      state.personas = data.personas || [];
+      if (!state.personas.length) {
+        $("headSub").textContent = "还没有 Agent";
+        $("timelineList").innerHTML = `<section class="glass card empty-state"><div class="big">${icon("spark")}</div><div class="t">还没有 Agent</div><div>先创建一个 Agent，再回来看看你们的回忆</div></section>`;
+        return;
+      }
+      const wanted = Number(new URLSearchParams(location.search).get("persona") || 0);
+      const chosen = state.personas.find((p) => p.id === wanted)
+        || state.personas.find((p) => p.is_active)
+        || state.personas[0];
+      state.personaId = chosen.id;
+      await loadTimeline();
+    }
+
+    mountTabbar("/app/timeline");
+    load().catch((error) => toast(error.message || String(error)));
+  </script>
+</body>
+</html>

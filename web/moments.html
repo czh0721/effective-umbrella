@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>朋友圈 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <style>
+    .moments-head { display: flex; align-items: center; gap: 10px; margin: -4px 0 12px; }
+    .moments-avatar {
+      width: 38px; height: 38px; border-radius: 13px; flex: none;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 15px; color: #fff;
+    }
+    .moments-body { margin: 0; font-size: 14.5px; line-height: 1.62; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
+    .moments-media { margin-top: 12px; border-radius: 16px; overflow: hidden; background: rgba(120,120,150,.08); }
+    .moments-media img { display: block; width: 100%; max-height: 320px; object-fit: cover; }
+    .moments-actions { display: flex; align-items: center; gap: 8px; margin: 12px -6px -6px; }
+    .moments-act {
+      display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent;
+      color: var(--text-2); font-size: 13px; font-weight: 650; padding: 7px 10px; border-radius: 12px;
+      cursor: pointer; transition: color .2s var(--ease), background .2s var(--ease), transform .2s var(--spring);
+      -webkit-tap-highlight-color: transparent;
+    }
+    .moments-act .ic { width: 19px; height: 19px; }
+    .moments-act:active { transform: scale(.94); }
+    .moments-act.on { color: #f43f76; }
+    .moments-act.on .ic { fill: currentColor; }
+    .moments-comments { margin-top: 12px; border-top: 1px solid rgba(0,0,0,.06); padding-top: 10px; }
+    .moments-comment { padding: 7px 0; font-size: 13.5px; line-height: 1.55; }
+    .moments-comment + .moments-comment { border-top: 1px dashed rgba(0,0,0,.05); }
+    .moments-cbody b, .moments-creply b { color: var(--v); font-weight: 700; margin-right: 7px; }
+    .moments-cbody span { color: var(--ink); }
+    .moments-creply { margin-top: 5px; padding-left: 2px; }
+    .moments-creply span { color: var(--text-2); }
+    .moments-creply.pending { color: var(--text-3); font-size: 12.5px; }
+    .moments-creply.failed { color: var(--text-3); font-size: 12.5px; }
+    .linkbtn { border: 0; background: transparent; color: var(--v); font-weight: 700; cursor: pointer; padding: 0 2px; font-size: 12.5px; }
+    .moments-cinput { display: flex; gap: 8px; margin-top: 10px; }
+    .moments-cinput input {
+      flex: 1; min-width: 0; border: 1px solid var(--glass-border); background: rgba(255,255,255,.7);
+      border-radius: 14px; padding: 10px 13px; font-size: 13.5px; color: var(--ink); outline: none;
+    }
+    .moments-cinput input:focus { border-color: rgba(124,92,255,.5); }
+    .moments-empty { text-align: center; }
+    .moments-tip { margin: 10px 2px 0; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a class="icon-btn" href="/app" aria-label="返回">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </a>
+    <b style="font-size:14px">朋友圈</b>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="reloadBtn" aria-label="刷新">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>
+    </button>
+  </div>
+
+  <div class="shell">
+    <div class="seg block" id="personaTabs" style="display:none"></div>
+    <div class="row block">
+      <div class="flex1">
+        <h2 style="font-size:20px;font-weight:800;margin:0">朋友圈</h2>
+        <div class="mini" id="headSub" style="margin-top:4px">加载中…</div>
+      </div>
+      <button class="btn small primary" id="publishBtn">让 ta 发一条</button>
+    </div>
+
+    <div id="momentList" class="stagger"></div>
+    <div style="text-align:center;margin-top:14px">
+      <button class="btn small ghost" id="moreBtn" style="display:none">加载更早的动态</button>
+    </div>
+    <div class="slogan">念念 · 想 ta 的时候，念念就好</div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    const state = {
+      personas: [], personaId: 0, moments: [], beforeId: 0,
+      perTurnCost: 0, enabled: true, pending: false,
+    };
+
+    function esc(text) { return escapeHtml(text || ""); }
+    function personaName(id) {
+      const p = state.personas.find((item) => item.id === id);
+      return p ? p.name : "ta";
+    }
+    function relTime(value) {
+      if (!value) return "";
+      const time = new Date(value).getTime();
+      if (Number.isNaN(time)) return String(value);
+      const minutes = Math.round((Date.now() - time) / 60000);
+      if (minutes < 1) return "刚刚";
+      if (minutes < 60) return minutes + " 分钟前";
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return hours + " 小时前";
+      const days = Math.round(hours / 24);
+      if (days < 7) return days + " 天前";
+      return fmtDate(value);
+    }
+
+    function renderPersonaTabs() {
+      const tabs = $("personaTabs");
+      if (state.personas.length <= 1) { tabs.style.display = "none"; tabs.innerHTML = ""; return; }
+      tabs.style.display = "";
+      tabs.innerHTML = state.personas.map((p) =>
+        `<div class="${p.id === state.personaId ? "active" : ""}" data-pid="${p.id}">${esc(p.name)}</div>`
+      ).join("");
+      tabs.querySelectorAll("[data-pid]").forEach((btn) => {
+        btn.onclick = () => {
+          state.personaId = Number(btn.dataset.pid);
+          state.moments = []; state.beforeId = 0;
+          loadMoments(true).catch((error) => toast(error.message));
+        };
+      });
+      refreshSegment(tabs);
+    }
+
+    function avatarStyle(name) {
+      const palettes = [
+        "linear-gradient(135deg,#7c5cff,#e879f9)",
+        "linear-gradient(135deg,#3d8bff,#22d3ee)",
+        "linear-gradient(135deg,#f43f76,#fb923c)",
+        "linear-gradient(135deg,#22c55e,#84cc16)",
+      ];
+      let sum = 0;
+      for (const char of String(name || "")) sum += char.charCodeAt(0);
+      return palettes[sum % palettes.length];
+    }
+
+    function momentHtml(moment) {
+      const liked = Number(moment.liked) > 0;
+      const likeCount = Number(moment.like_count) || 0;
+      const commentCount = Number(moment.comment_count) || 0;
+      const source = moment.source === "manual" ? "手动催更" : "自动发布";
+      const media = moment.has_sticker
+        ? `<div class="moments-media"><img src="/api/moments/${moment.id}/sticker" alt="配图" loading="lazy" /></div>`
+        : "";
+      return `<article class="glass card moments-card" data-id="${moment.id}">
+        <div class="moments-head">
+          <div class="moments-avatar" style="background:${avatarStyle(personaName(moment.persona_id))}">${esc(personaName(moment.persona_id).slice(0, 1))}</div>
+          <div class="flex1">
+            <b style="font-size:14px">${esc(personaName(moment.persona_id))}</b>
+            <div class="mini">${esc(relTime(moment.created_at))} · ${source}</div>
+          </div>
+          <button class="card-del" data-del aria-label="删除">${icon("trash")}</button>
+        </div>
+        <p class="moments-body">${esc(moment.content)}</p>
+        ${media}
+        <div class="moments-actions">
+          <button class="moments-act ${liked ? "on" : ""}" data-like aria-pressed="${liked}">${icon("heart")}<span>${likeCount > 0 ? likeCount : "赞"}</span></button>
+          <button class="moments-act" data-toggle>${icon("chat")}<span>${commentCount > 0 ? commentCount : "评论"}</span></button>
+        </div>
+        <div class="moments-comments" hidden></div>
+      </article>`;
+    }
+
+    function commentHtml(comment) {
+      const name = personaName(state.personaId);
+      let reply = "";
+      if (comment.reply) {
+        reply = `<div class="moments-creply"><b>${esc(name)}</b><span>${esc(comment.reply)}</span></div>`;
+      } else if (comment.reply_status === "failed") {
+        reply = `<div class="moments-creply failed">ta 没回上，<button class="linkbtn" data-retry="${comment.id}">重试</button></div>`;
+      } else {
+        reply = '<div class="moments-creply pending">ta 正在回复…</div>';
+      }
+      return `<div class="moments-comment"><div class="moments-cbody"><b>我</b><span>${esc(comment.content)}</span></div>${reply}</div>`;
+    }
+
+    function renderList(append) {
+      const host = $("momentList");
+      if (!state.moments.length) {
+        host.innerHTML = `<section class="glass card empty-state moments-empty">
+          <div class="big">${icon("moments")}</div>
+          <div class="t">还没有动态</div>
+          <div>${state.enabled ? "点上面的按钮，让 ta 先发一条" : "开启朋友圈后，ta 会自己在这里记录生活"}</div>
+        </section>`;
+        return;
+      }
+      const html = state.moments.map(momentHtml).join("");
+      if (append) host.insertAdjacentHTML("beforeend", html);
+      else host.innerHTML = html;
+      bindCards();
+    }
+
+    function bindCards(root) {
+      const nodes = (root || $("momentList")).querySelectorAll(".moments-card");
+      const cards = Array.prototype.slice.call(nodes);
+      cards.forEach((card) => {
+        if (card.dataset.bound) return;
+        card.dataset.bound = "1";
+        const momentId = Number(card.dataset.id);
+
+        card.querySelector("[data-del]").onclick = async () => {
+          if (!confirm("删除这条动态？")) return;
+          try {
+            await api(`/api/moments/${momentId}`, { method: "DELETE" });
+            state.moments = state.moments.filter((item) => item.id !== momentId);
+            renderList(false);
+            toast("已删除");
+          } catch (error) { toast(error.message); }
+        };
+
+        card.querySelector("[data-like]").onclick = async () => {
+          const button = card.querySelector("[data-like]");
+          if (button.dataset.busy) return;
+          button.dataset.busy = "1";
+          const on = button.classList.contains("on");
+          try {
+            const result = await api(`/api/moments/${momentId}/like`, { method: on ? "DELETE" : "POST" });
+            button.classList.toggle("on", result.liked);
+            button.setAttribute("aria-pressed", String(result.liked));
+            button.querySelector("span").textContent = result.like_count > 0 ? result.like_count : "赞";
+            const item = state.moments.find((m) => m.id === momentId);
+            if (item) { item.liked = result.liked ? 1 : 0; item.like_count = result.like_count; }
+          } catch (error) { toast(error.message); }
+          finally { delete button.dataset.busy; }
+        };
+
+        card.querySelector("[data-toggle]").onclick = () => {
+          const panel = card.querySelector(".moments-comments");
+          if (panel.hidden) { panel.hidden = false; loadComments(card, momentId); }
+          else panel.hidden = true;
+        };
+      });
+    }
+
+    async function loadComments(card, momentId) {
+      const panel = card.querySelector(".moments-comments");
+      const existing = panel.querySelector(".moments-clist");
+      if (existing) return;
+      panel.innerHTML = '<div class="mini" style="padding:6px 0">加载评论…</div>';
+      let data;
+      try { data = await api(`/api/moments/${momentId}/comments`); }
+      catch (error) { panel.innerHTML = `<div class="mini" style="padding:6px 0">${esc(error.message)}</div>`; return; }
+      panel.innerHTML = `<div class="moments-clist">${(data.comments || []).map(commentHtml).join("") || '<div class="mini" style="padding:4px 0">还没有评论，说点什么吧</div>'}</div>
+        <div class="moments-cinput">
+          <input placeholder="写评论…" maxlength="500" aria-label="写评论" />
+          <button class="btn small primary" data-send>发送</button>
+        </div>`;
+      bindComments(card, momentId);
+    }
+
+    function bindComments(card, momentId) {
+      const panel = card.querySelector(".moments-comments");
+      panel.querySelectorAll("[data-retry]").forEach((button) => {
+        button.onclick = async () => {
+          if (button.disabled) return;
+          button.disabled = true;
+          button.textContent = "重试中…";
+          try {
+            await api(`/api/moments/comments/${button.dataset.retry}/retry`, { method: "POST" });
+            panel.querySelector(".moments-clist").remove();
+            await loadComments(card, momentId);
+          } catch (error) { toast(error.message); button.disabled = false; button.textContent = "重试"; }
+        };
+      });
+      const input = panel.querySelector("input");
+      const send = panel.querySelector("[data-send]");
+      const submit = async () => {
+        const content = input.value.trim();
+        if (!content) { toast("先写点内容吧"); return; }
+        if (send.disabled) return;
+        send.disabled = true;
+        input.disabled = true;
+        try {
+          await api(`/api/moments/${momentId}/comments`, { method: "POST", body: JSON.stringify({ content }) });
+          panel.querySelector(".moments-clist").remove();
+          await loadComments(card, momentId);
+          refreshCount(momentId, +1);
+        } catch (error) { toast(error.message); send.disabled = false; input.disabled = false; }
+      };
+      send.onclick = submit;
+      input.onkeydown = (event) => { if (event.key === "Enter") submit(); };
+    }
+
+    function refreshCount(momentId, delta) {
+      const item = state.moments.find((m) => m.id === momentId);
+      if (!item) return;
+      item.comment_count = Math.max(0, (Number(item.comment_count) || 0) + delta);
+      const card = document.querySelector(`.moments-card[data-id="${momentId}"]`);
+      if (card) {
+        const label = card.querySelector("[data-toggle] span");
+        label.textContent = item.comment_count > 0 ? item.comment_count : "评论";
+      }
+    }
+
+    function updateHeader() {
+      const cost = Number(state.perTurnCost) || 0;
+      const price = cost > 0 ? `每轮消耗 ${cost} 积分` : "当前免费";
+      $("headSub").textContent = `${personaName(state.personaId)} · ${state.moments.length} 条动态 · ${price}`;
+      $("publishBtn").disabled = state.pending;
+      $("moreBtn").style.display = state.beforeId ? "" : "none";
+    }
+
+    async function loadMoments(reset) {
+      const host = $("momentList");
+      if (reset) {
+        state.moments = []; state.beforeId = 0;
+        host.innerHTML = skeletonCards(3);
+      }
+      const query = `?limit=20${state.beforeId ? "&before_id=" + state.beforeId : ""}`;
+      const data = await api(`/api/personas/${state.personaId}/moments${query}`);
+      state.enabled = !!data.moments_enabled;
+      state.perTurnCost = Number(data.per_turn_cost) || 0;
+      state.moments = reset ? (data.moments || []) : state.moments.concat(data.moments || []);
+      state.beforeId = data.next_before_id || 0;
+      renderList(!reset);
+      updateHeader();
+    }
+
+    async function publish() {
+      if (state.pending) return;
+      state.pending = true;
+      const button = $("publishBtn");
+      button.textContent = "ta 正在想…";
+      updateHeader();
+      try {
+        const data = await api(`/api/personas/${state.personaId}/moments`, { method: "POST" });
+        state.moments.unshift(data.moment);
+        renderList(false);
+        toast("已发布一条");
+      } catch (error) { toast(error.message); }
+      finally {
+        state.pending = false;
+        button.textContent = "让 ta 发一条";
+        updateHeader();
+      }
+    }
+
+    $("publishBtn").onclick = publish;
+    $("reloadBtn").onclick = () => loadMoments(true).catch((error) => toast(error.message));
+    $("moreBtn").onclick = () => loadMoments(false).catch((error) => toast(error.message));
+
+    async function load() {
+      const data = await me();
+      state.personas = data.personas || [];
+      if (!state.personas.length) {
+        $("headSub").textContent = "还没有 Agent";
+        $("publishBtn").disabled = true;
+        $("momentList").innerHTML = `<section class="glass card empty-state"><div class="big">${icon("spark")}</div><div class="t">还没有 Agent</div><div>先创建一个 Agent，再来看 ta 的朋友圈</div></section>`;
+        return;
+      }
+      const wanted = Number(new URLSearchParams(location.search).get("persona") || 0);
+      const chosen = state.personas.find((p) => p.id === wanted)
+        || state.personas.find((p) => p.is_active)
+        || state.personas[0];
+      state.personaId = chosen.id;
+      renderPersonaTabs();
+      await loadMoments(true);
+    }
+
+    mountTabbar("/app/moments");
+    load().catch((error) => toast(error.message));
+  </script>
+</body>
+</html>

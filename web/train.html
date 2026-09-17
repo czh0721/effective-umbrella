@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>训练人格 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="grid">
+      <section class="glass card col-8">
+        <h2>训练人格</h2>
+        <div class="sub">上传聊天记录与照片，或直接粘贴文字；平台会提炼出 ta 的说话方式。</div>
+
+        <div class="field">
+          <label>训练到哪个人格</label>
+          <select id="personaSelect" style="width:100%;padding:11px 14px;border-radius:14px;border:1px solid var(--stroke);background:var(--glass-strong);color:var(--text);font:inherit"></select>
+        </div>
+
+        <label class="drop" id="drop" for="fileInput"
+          style="display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center;padding:28px 18px;border-radius:20px;border:1px dashed var(--stroke);cursor:pointer;background:var(--glass)">
+          <strong>拖入或点击选择素材</strong>
+          <span class="hint">微信 / iMessage(.db) / 短信(.xml) / 社交导出(.json) / PDF / 照片(jpg png heic) / txt · csv</span>
+          <input id="fileInput" type="file" multiple hidden
+            accept=".txt,.csv,.json,.jsonl,.log,.md,.xml,.db,.sqlite,.sqlite3,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.html,.htm" />
+        </label>
+        <div class="filelist hint" id="fileList"></div>
+        <div class="btnrow">
+          <button class="btn" id="uploadBtn">上传文件</button>
+        </div>
+
+        <div class="field" style="margin-top:16px">
+          <label>或粘贴文字 / 你对 ta 的主观描述</label>
+          <textarea id="pasteInput" placeholder="粘贴聊天记录，或写下 ta 的口头禅、性格、你们一起去过的地方…"></textarea>
+        </div>
+        <div class="btnrow">
+          <button class="btn" id="pasteBtn">加入粘贴内容</button>
+        </div>
+
+        <div class="field" style="margin-top:16px">
+          <label>要复刻的对象昵称（留空自动推断）</label>
+          <input id="targetInput" placeholder="例如：小鹿" />
+        </div>
+        <div class="btnrow">
+          <button class="btn" id="ingestBtn">解析素材</button>
+          <button class="btn primary" id="distillBtn">开始蒸馏</button>
+        </div>
+        <div class="log" id="log">等待操作…</div>
+      </section>
+
+      <section class="glass card col-4">
+        <h2>说明</h2>
+        <div class="hint">
+          1. 新建人格后，先选好要训练到哪个人格。<br />
+          2. 上传或粘贴素材，点「解析素材」。<br />
+          3. 点「开始蒸馏」，等待生成人格档案。<br />
+          4. 到「模型设置」填入你自己的大模型 Key，蒸馏与对话才会调用模型。
+        </div>
+      </section>
+    </div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    let files = [];
+    let personas = [];
+    let activeId = null;
+    const logBox = $("log");
+
+    function log(message) { logBox.textContent = message; }
+
+    async function load() {
+      const data = await me();
+      personas = data.personas;
+      activeId = data.active_persona_id;
+      const wanted = Number(new URLSearchParams(location.search).get("persona")) || null;
+      const selected = wanted || activeId;
+      $("personaSelect").innerHTML = personas.length
+        ? personas.map((p) => `<option value="${p.id}" ${p.id === selected ? "selected" : ""}>${p.name}</option>`).join("")
+        : '<option value="">（尚未创建人格）</option>';
+    }
+
+    $("fileInput").onchange = (event) => {
+      files = Array.from(event.target.files || []);
+      $("fileList").textContent = files.length ? "已选择：" + files.map((f) => f.name).join(", ") : "";
+      syncDistill();
+    };
+    const drop = $("drop");
+    ["dragenter", "dragover"].forEach((type) => drop.addEventListener(type, (e) => {
+      e.preventDefault(); drop.style.borderColor = "var(--primary)";
+    }));
+    ["dragleave", "drop"].forEach((type) => drop.addEventListener(type, (e) => {
+      e.preventDefault(); drop.style.borderColor = "var(--stroke)";
+    }));
+    drop.addEventListener("drop", (e) => {
+      files = Array.from(e.dataTransfer.files || []);
+      $("fileList").textContent = "已选择：" + files.map((f) => f.name).join(", ");
+    });
+
+    function currentPersonaId() {
+      const value = Number($("personaSelect").value);
+      return value || activeId;
+    }
+
+    function syncDistill() { $("distillBtn").disabled = !currentPersonaId(); }
+
+    $("uploadBtn").onclick = async () => {
+      if (!files.length) { toast("请先选择文件"); return; }
+      const form = new FormData();
+      files.forEach((file) => form.append("files", file));
+      log("正在上传 " + files.length + " 个文件…");
+      try {
+        const data = await api("/api/upload", { method: "POST", body: form });
+        log("已上传：" + data.saved.join(", "));
+        toast("上传完成");
+      } catch (error) { log("上传失败：" + error.message); }
+    };
+
+    $("pasteBtn").onclick = async () => {
+      const text = $("pasteInput").value.trim();
+      if (!text) { toast("粘贴内容为空"); return; }
+      try {
+        const data = await api("/api/paste", { method: "POST", body: JSON.stringify({ text }) });
+        log("已加入粘贴内容：" + data.chars + " 字");
+        $("pasteInput").value = "";
+        toast("已加入");
+      } catch (error) { log("失败：" + error.message); }
+    };
+
+    $("ingestBtn").onclick = async () => {
+      const personaId = currentPersonaId();
+      if (!personaId) { toast("请先创建人格"); return; }
+      log("正在解析素材…");
+      try {
+        const data = await api("/api/ingest", {
+          method: "POST",
+          body: JSON.stringify({ persona_id: personaId, target: $("targetInput").value.trim() || null }),
+        });
+        log(`解析完成：共 ${data.total} 条消息，目标对象 = ${data.target}`);
+        toast("解析完成");
+      } catch (error) { log("解析失败：" + error.message); }
+    };
+
+    $("distillBtn").onclick = async () => {
+      const personaId = currentPersonaId();
+      if (!personaId) { toast("请先创建人格"); return; }
+      $("distillBtn").disabled = true;
+      log("正在蒸馏人格（调用大模型，可能需要十几秒）…");
+      try {
+        const data = await api("/api/distill", {
+          method: "POST",
+          body: JSON.stringify({ persona_id: personaId, use_llm: true }),
+        });
+        log(`蒸馏完成：目标 = ${data.profile.name}，样本 ${data.profile.message_count} 条，`
+          + `调用大模型 = ${data.profile.used_llm}。`
+          + `\n查看或编辑：/app/agent/${personaId}`);
+        toast("人格已生成");
+      } catch (error) { log("蒸馏失败：" + error.message); }
+      finally { syncDistill(); }
+    };
+
+    $("personaSelect").onchange = syncDistill;
+
+    mountTabbar("/app/train");
+    load().then(syncDistill).catch((error) => toast(error.message));
+  </script>
+</body>
+</html>

@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#e9edf7" />
+<meta name="description" content="ex-persona 控制台" />
+<title>ex-persona · 控制台</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg-1: #eef1f8;
+    --bg-2: #e4e9f5;
+    --blob-a: rgba(120, 150, 255, .55);
+    --blob-b: rgba(255, 150, 205, .45);
+    --blob-c: rgba(120, 225, 220, .45);
+    --text: #12151c;
+    --muted: #6b7280;
+    --muted-2: #9aa2b1;
+    --glass: rgba(255, 255, 255, .55);
+    --glass-strong: rgba(255, 255, 255, .72);
+    --glass-border: rgba(255, 255, 255, .75);
+    --glass-hair: rgba(255, 255, 255, .5);
+    --stroke: rgba(18, 21, 28, .08);
+    --shadow: 0 18px 50px -20px rgba(24, 38, 74, .38);
+    --shadow-soft: 0 8px 30px -18px rgba(24, 38, 74, .45);
+    --accent: #0a84ff;
+    --accent-2: #6b5cff;
+    --accent-grad: linear-gradient(140deg, #4aa8ff, #0a84ff 45%, #6b5cff);
+    --ring: rgba(10, 132, 255, .35);
+  }
+
+  html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg-1: #0a0c12;
+    --bg-2: #0f1320;
+    --blob-a: rgba(80, 110, 255, .40);
+    --blob-b: rgba(200, 90, 160, .30);
+    --blob-c: rgba(60, 190, 190, .30);
+    --text: #eef1f8;
+    --muted: #98a0b3;
+    --muted-2: #6d7688;
+    --glass: rgba(28, 32, 44, .55);
+    --glass-strong: rgba(30, 35, 48, .72);
+    --glass-border: rgba(255, 255, 255, .12);
+    --glass-hair: rgba(255, 255, 255, .14);
+    --stroke: rgba(255, 255, 255, .08);
+    --shadow: 0 22px 60px -24px rgba(0, 0, 0, .8);
+    --shadow-soft: 0 10px 34px -20px rgba(0, 0, 0, .8);
+    --accent: #3f9dff;
+    --accent-2: #7d6bff;
+    --ring: rgba(80, 150, 255, .4);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] {
+      color-scheme: dark;
+      --bg-1: #0a0c12;
+      --bg-2: #0f1320;
+      --blob-a: rgba(80, 110, 255, .40);
+      --blob-b: rgba(200, 90, 160, .30);
+      --blob-c: rgba(60, 190, 190, .30);
+      --text: #eef1f8;
+      --muted: #98a0b3;
+      --muted-2: #6d7688;
+      --glass: rgba(28, 32, 44, .55);
+      --glass-strong: rgba(30, 35, 48, .72);
+      --glass-border: rgba(255, 255, 255, .12);
+      --glass-hair: rgba(255, 255, 255, .14);
+      --stroke: rgba(255, 255, 255, .08);
+      --shadow: 0 22px 60px -24px rgba(0, 0, 0, .8);
+      --shadow-soft: 0 10px 34px -20px rgba(0, 0, 0, .8);
+      --accent: #3f9dff;
+      --accent-2: #7d6bff;
+      --ring: rgba(80, 150, 255, .4);
+    }
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+      "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  .aurora { position: fixed; inset: -20%; z-index: 0; overflow: hidden; pointer-events: none; }
+  .blob { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .9; animation: drift 26s ease-in-out infinite alternate; }
+  .b1 { width: 46vmax; height: 46vmax; left: 2%; top: 4%; background: var(--blob-a); }
+  .b2 { width: 40vmax; height: 40vmax; right: 0%; top: 18%; background: var(--blob-b); animation-delay: -6s; }
+  .b3 { width: 38vmax; height: 38vmax; left: 26%; bottom: -6%; background: var(--blob-c); animation-delay: -12s; }
+  .b4 { width: 26vmax; height: 26vmax; right: 22%; bottom: 4%; background: var(--blob-a); animation-delay: -18s; opacity: .6; }
+  @keyframes drift {
+    0% { transform: translate3d(0, 0, 0) scale(1); }
+    50% { transform: translate3d(4vmax, -3vmax, 0) scale(1.08); }
+    100% { transform: translate3d(-3vmax, 4vmax, 0) scale(.96); }
+  }
+
+  .app {
+    position: relative; z-index: 1;
+    max-width: 1000px; margin: 0 auto;
+    min-height: 100dvh; padding: max(16px, env(safe-area-inset-top)) 20px max(28px, env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 16px;
+  }
+
+  .glass {
+    background: var(--glass);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    backdrop-filter: blur(30px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow);
+    position: relative;
+  }
+  .glass::before {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: linear-gradient(160deg, var(--glass-hair), transparent 42%);
+    opacity: .9; z-index: -1;
+  }
+
+  .topbar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 14px; border-radius: 24px;
+    animation: drop-in .6s cubic-bezier(.2, .8, .2, 1) both;
+    position: sticky; top: max(12px, env(safe-area-inset-top)); z-index: 20;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+  .logo {
+    width: 36px; height: 36px; border-radius: 12px; flex: none;
+    background: var(--accent-grad); display: grid; place-items: center;
+    box-shadow: 0 8px 20px -8px var(--accent);
+  }
+  .logo svg { width: 20px; height: 20px; }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+  .brand-text strong { font-size: 15px; letter-spacing: .2px; }
+  .brand-text span { font-size: 11px; color: var(--muted); }
+
+  .conn {
+    margin-left: auto; display: flex; align-items: center; gap: 8px;
+    padding: 7px 14px; border-radius: 999px; font-size: 12.5px; color: var(--muted);
+    background: color-mix(in srgb, var(--glass-strong) 70%, transparent);
+    border: 1px solid var(--stroke);
+  }
+  .orb { width: 8px; height: 8px; border-radius: 50%; background: var(--muted-2); flex: none; transition: background .3s; }
+  .orb.on { background: #30d158; animation: pulse 2s infinite; }
+  .orb.wait { background: #ffb020; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(48, 209, 88, .55); }
+    70% { box-shadow: 0 0 0 8px rgba(48, 209, 88, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(48, 209, 88, 0); }
+  }
+
+  .icon-btn {
+    width: 38px; height: 38px; border-radius: 50%; flex: none;
+    display: grid; place-items: center; cursor: pointer;
+    background: var(--glass-strong); color: var(--text);
+    border: 1px solid var(--glass-border);
+    -webkit-backdrop-filter: blur(18px) saturate(160%); backdrop-filter: blur(18px) saturate(160%);
+    transition: transform .18s cubic-bezier(.2,.8,.2,1), box-shadow .25s;
+  }
+  .icon-btn svg { width: 17px; height: 17px; }
+  .icon-btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+  .icon-btn:active { transform: scale(.94); }
+
+  main.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-content: start; }
+  .span2 { grid-column: 1 / -1; }
+
+  .card { border-radius: 26px; padding: 20px; animation: drop-in .6s cubic-bezier(.2,.8,.2,1) both; }
+  .card:nth-child(1) { animation-delay: .02s; }
+  .card:nth-child(2) { animation-delay: .06s; }
+  .card:nth-child(3) { animation-delay: .1s; }
+  .card:nth-child(4) { animation-delay: .14s; }
+  @keyframes drop-in { from { opacity: 0; transform: translateY(-10px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  .card-h { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .card-h h2 { margin: 0; font-size: 16px; letter-spacing: .2px; }
+  .card-h .badge { margin-left: auto; }
+  .card-sub { margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+  .card-sub b { color: var(--text); }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12.5px; }
+  .badge.ok { background: rgba(48, 209, 88, .16); color: #1faa4b; }
+  .badge.warn { background: rgba(255, 176, 32, .18); color: #c07d00; }
+
+  .btnrow { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 4px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 10px 17px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 14px;
+    background: var(--glass-strong); color: var(--text); border: 1px solid var(--glass-border);
+    transition: transform .18s cubic-bezier(.2,.8,.2,1), box-shadow .25s, filter .25s;
+  }
+  .btn svg { width: 15px; height: 15px; }
+  .btn:hover { transform: translateY(-1px); box-shadow: var(--shadow-soft); }
+  .btn:active { transform: scale(.96); }
+  .btn.primary { background: var(--accent-grad); border-color: transparent; color: #fff; box-shadow: 0 12px 26px -14px var(--accent); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 6px 0 16px; }
+  .qr-box {
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    padding: 16px; background: #fff; border-radius: 20px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.06), 0 14px 34px -22px rgba(0,0,0,.5);
+    animation: rise .4s cubic-bezier(.2,.9,.25,1) both;
+  }
+  .qr-box svg { width: 208px; height: 208px; }
+  @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+  .qr-hint { font-size: 12.5px; color: var(--muted); }
+
+  .info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-bottom: 14px; }
+  .info .k { font-size: 12px; color: var(--muted); }
+  .info .v { font-size: 15px; font-weight: 600; }
+  .info .v.small { font-size: 13px; font-weight: 500; }
+  .empty-line { font-size: 13.5px; color: var(--muted); margin: 0 0 14px; }
+
+  .field { margin-bottom: 13px; }
+  .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 7px; font-weight: 500; }
+  .field input, .field textarea {
+    width: 100%; padding: 11px 14px; border-radius: 13px;
+    background: color-mix(in srgb, var(--glass) 60%, transparent);
+    color: var(--text); border: 1px solid var(--stroke); font: inherit; outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .field textarea { resize: vertical; min-height: 92px; line-height: 1.55; }
+  .field input:focus, .field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--ring); }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 7px; line-height: 1.6; }
+
+  .drop {
+    display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center;
+    padding: 26px 18px; border-radius: 20px; cursor: pointer;
+    border: 1.5px dashed color-mix(in srgb, var(--muted-2) 60%, transparent);
+    background: color-mix(in srgb, var(--glass) 45%, transparent);
+    transition: border-color .25s, background .25s, transform .2s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .drop:active { transform: scale(.99); }
+  .drop svg { width: 26px; height: 26px; color: var(--accent); }
+  .drop strong { font-size: 14px; }
+  .drop span { font-size: 12.5px; color: var(--muted); }
+  .filelist { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  .filetag {
+    font-size: 12px; padding: 5px 11px; border-radius: 999px;
+    background: color-mix(in srgb, var(--glass-strong) 80%, transparent);
+    border: 1px solid var(--stroke);
+    animation: rise .3s cubic-bezier(.2,.9,.25,1) both;
+  }
+
+  .log {
+    margin-top: 12px; padding: 13px 14px; border-radius: 15px;
+    background: color-mix(in srgb, var(--bg-2) 72%, transparent);
+    border: 1px solid var(--stroke);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
+    color: var(--muted); white-space: pre-wrap; max-height: 210px; overflow-y: auto;
+  }
+  pre.log { margin: 12px 0 0; }
+
+  .toasts { position: fixed; z-index: 80; left: 50%; bottom: 28px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+  .toast {
+    pointer-events: auto; padding: 10px 16px; border-radius: 999px; font-size: 13px;
+    background: var(--glass-strong); border: 1px solid var(--glass-border); color: var(--text);
+    -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+    box-shadow: var(--shadow); animation: toast-in .45s cubic-bezier(.2,.9,.25,1) both;
+  }
+  .toast.out { animation: toast-out .3s ease forwards; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(14px) scale(.96); } to { opacity: 1; transform: none; } }
+  @keyframes toast-out { to { opacity: 0; transform: translateY(8px) scale(.97); } }
+
+  @media (max-width: 720px) {
+    .app { padding-left: 14px; padding-right: 14px; }
+    main.grid { grid-template-columns: 1fr; }
+    .span2 { grid-column: auto; }
+    .brand-text span { display: none; }
+    .qr-box svg { width: 190px; height: 190px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+    .blob { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="aurora" aria-hidden="true">
+  <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span><span class="blob b4"></span>
+</div>
+
+<div class="app">
+  <header class="topbar glass">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 21s-7.5-4.6-9.4-9A5.4 5.4 0 0 1 12 6.3 5.4 5.4 0 0 1 21.4 12C19.5 16.4 12 21 12 21Z" fill="#fff" fill-opacity=".95"/></svg>
+      </div>
+      <div class="brand-text"><strong>ex-persona</strong><span>微信 ClawBot 控制台</span></div>
+    </div>
+    <div class="conn"><span class="orb" id="statusOrb"></span><span id="connText">检查中</span></div>
+    <button class="icon-btn" id="btnTheme" aria-label="切换主题">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9c0-.5-.5-.9-1-.8A7 7 0 0 1 11.8 3.3c.1-.5-.3-1-.8-1Z"/></svg>
+    </button>
+  </header>
+
+  <main class="grid">
+    <section class="card glass span2">
+      <div class="card-h">
+        <h2>微信 ClawBot</h2>
+        <span class="badge warn" id="wxState">未连接</span>
+      </div>
+      <p class="card-sub">扫码登录后，发到该微信的消息会转给「<b id="wxPersona">当前人格</b>」自动回复。长挂机请把本服务与 weclaw 跑在你自己的常开电脑上。</p>
+      <div class="qr-wrap">
+        <div class="qr-box" id="qrBox" style="display:none"></div>
+        <div class="qr-hint" id="qrHint">点「获取二维码」，用手机微信扫码登录。</div>
+      </div>
+      <div class="btnrow">
+        <button class="btn primary" id="btnWxLogin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M13 16.5h7M16.5 13v7"/></svg>
+          获取二维码
+        </button>
+        <button class="btn" id="btnWxStart">启动转发</button>
+        <button class="btn" id="btnWxStop">停止</button>
+        <button class="btn" id="btnWxRefresh">刷新状态</button>
+      </div>
+      <div class="log" id="wxLog">等待操作…</div>
+    </section>
+
+    <section class="card glass">
+      <div class="card-h"><h2>人格</h2></div>
+      <div id="personaInfo"><p class="empty-line">未加载人格，先在右侧「训练」上传聊天记录。</p></div>
+      <button class="btn" id="btnSkill">查看人格卡</button>
+      <pre class="log" id="skillBox" style="display:none"></pre>
+    </section>
+
+    <section class="card glass">
+      <div class="card-h"><h2>模型设置</h2></div>
+      <div class="field">
+        <label>API Key</label>
+        <input id="cfgKey" type="password" placeholder="sk-…" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Base URL</label>
+        <input id="cfgBase" placeholder="https://api.deepseek.com/v1" />
+      </div>
+      <div class="field">
+        <label>模型名</label>
+        <input id="cfgModel" placeholder="deepseek-chat" />
+      </div>
+      <div class="btnrow"><button class="btn primary" id="btnSaveConfig">保存设置</button></div>
+      <p class="hint">Key 只保存在本机 .env，不会上传到任何第三方。</p>
+    </section>
+
+    <section class="card glass span2">
+      <div class="card-h"><h2>训练人格</h2></div>
+      <label class="drop" id="drop" for="fileInput">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <strong>拖入或点击选择素材</strong>
+        <span>微信 / iMessage(.db) / 短信(.xml) / 微博·豆瓣·小红书·Instagram(.json) / PDF / 照片(jpg png heic) / txt · csv</span>
+        <input id="fileInput" type="file" multiple hidden
+          accept=".txt,.csv,.json,.jsonl,.log,.md,.xml,.db,.sqlite,.sqlite3,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.html,.htm" />
+      </label>
+      <div class="filelist" id="fileList"></div>
+      <div class="field" style="margin-top:14px">
+        <label>或直接粘贴文字 / 你的主观描述</label>
+        <textarea id="pasteInput" placeholder="粘贴聊天记录，或写下你对 ta 的描述、口头禅、你们一起去过的地方…"></textarea>
+      </div>
+      <div class="btnrow">
+        <button class="btn" id="btnUpload">上传文件</button>
+        <button class="btn" id="btnPaste">加入粘贴内容</button>
+      </div>
+      <div class="field" style="margin-top:14px">
+        <label>要复刻的对象昵称（留空自动推断）</label>
+        <input id="targetInput" placeholder="例如：小鹿" />
+      </div>
+      <div class="btnrow">
+        <button class="btn primary" id="btnDistill" disabled>开始蒸馏</button>
+      </div>
+      <div class="log" id="setupLog">等待操作…</div>
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const THEMES = ["auto", "light", "dark"];
+let hasKey = false;
+
+function toast(text) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = text;
+  $("toasts").appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 320); }, 2200);
+}
+
+function currentTheme() { return localStorage.getItem("persona-theme") || "auto"; }
+function applyTheme(mode) {
+  document.documentElement.dataset.theme = mode;
+  localStorage.setItem("persona-theme", mode);
+  const dark = mode === "dark" || (mode === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = dark ? "#0a0c12" : "#e9edf7";
+}
+$("btnTheme").onclick = () => {
+  const next = THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length];
+  applyTheme(next);
+  toast(next === "auto" ? "跟随系统外观" : next === "dark" ? "深色外观" : "浅色外观");
+};
+applyTheme(currentTheme());
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(currentTheme()));
+
+function log(text) {
+  const box = $("setupLog");
+  box.textContent += "\n" + text;
+  box.scrollTop = box.scrollHeight;
+}
+function wxLog(text) {
+  const box = $("wxLog");
+  box.textContent += "\n" + text;
+  box.scrollTop = box.scrollHeight;
+}
+function setOrb(cls, text) {
+  $("statusOrb").className = "orb" + (cls ? " " + cls : "");
+  if (text) $("connText").textContent = text;
+}
+
+async function refreshStatus() {
+  const res = await fetch("/api/status");
+  const data = await res.json();
+  hasKey = data.config.has_key;
+  if (data.config.base_url) $("cfgBase").value = data.config.base_url;
+  if (data.config.model) $("cfgModel").value = data.config.model;
+
+  const box = $("personaInfo");
+  if (data.profile) {
+    const p = data.profile;
+    $("wxPersona").textContent = p.name;
+    box.innerHTML = `
+      <div class="info">
+        <div><div class="k">对象</div><div class="v">${escapeHtml(p.name)}</div></div>
+        <div><div class="k">样本消息</div><div class="v">${p.message_count} 条</div></div>
+        <div><div class="k">检索对话对</div><div class="v">${p.pair_count} 对</div></div>
+        <div><div class="k">人格卡片</div><div class="v small">${p.used_llm ? "已生成" : "仅统计（未用模型）"}</div></div>
+      </div>`;
+  } else {
+    box.innerHTML = '<p class="empty-line">未加载人格，先在下方「训练」上传聊天记录。</p>';
+    $("wxPersona").textContent = "当前人格";
+  }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+async function refreshWx() {
+  try {
+    const res = await fetch("/api/wechat/status");
+    const data = await res.json();
+    renderWx(data);
+    if (data.phase === "logged-in" && !data.running && !wxAutoStarted) {
+      wxAutoStarted = true;
+      wxLog("登录成功，正在启动微信转发…");
+      const started = await fetch("/api/wechat/start", { method: "POST" });
+      const sd = await started.json();
+      wxLog(sd.output || sd.detail || "");
+      if (sd.detail) wxAutoStarted = false;
+    }
+  } catch (e) {
+    setOrb("", "无法连接服务");
+  }
+}
+
+let wxAutoStarted = false;
+
+function renderWx(data) {
+  const badge = $("wxState");
+  const labels = {
+    idle: ["未连接", "warn"],
+    starting: ["正在获取二维码", "warn"],
+    "waiting-scan": ["请扫码登录", "warn"],
+    "logged-in": ["已登录，正在启动", "ok"],
+    failed: ["失败", "warn"]
+  };
+  let text, cls;
+  if (data.running) { text = "转发运行中"; cls = "ok"; }
+  else if (labels[data.phase]) { [text, cls] = labels[data.phase]; }
+  else { text = data.phase || "未连接"; cls = "warn"; }
+  badge.textContent = text;
+  badge.className = "badge " + cls;
+  if (data.running) setOrb("on", "微信在线");
+  else if (data.phase === "waiting-scan" || data.phase === "starting") setOrb("wait", "待扫码");
+  else setOrb("", "微信离线");
+
+  const box = $("qrBox");
+  if (data.qr_svg) {
+    box.innerHTML = data.qr_svg;
+    box.style.display = "flex";
+    $("qrHint").textContent = "请用手机微信扫码，登录后自动开始转发。";
+  } else {
+    box.style.display = "none";
+  }
+  if (data.running && data.bridge_log) {
+    const tail = data.bridge_log.trim().split("\n").slice(-10).join("\n");
+    $("wxLog").textContent = tail;
+  }
+}
+
+$("btnWxLogin").onclick = async () => {
+  $("btnWxLogin").disabled = true;
+  wxAutoStarted = false;
+  wxLog("正在获取二维码…");
+  try {
+    const res = await fetch("/api/wechat/login", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "获取失败");
+    renderWx(data);
+    if (data.qr_url) wxLog("二维码已生成，请用微信扫码。");
+  } catch (e) {
+    wxLog("失败：" + e.message);
+  } finally {
+    $("btnWxLogin").disabled = false;
+  }
+};
+$("btnWxStart").onclick = async () => {
+  wxAutoStarted = true;
+  wxLog("正在启动转发…");
+  const res = await fetch("/api/wechat/start", { method: "POST" });
+  const data = await res.json();
+  wxLog(data.output || data.detail || "");
+  await refreshWx();
+  toast("已启动微信转发");
+};
+$("btnWxStop").onclick = async () => {
+  wxAutoStarted = false;
+  const res = await fetch("/api/wechat/stop", { method: "POST" });
+  const data = await res.json();
+  wxLog(data.output || "已停止");
+  await refreshWx();
+  toast("已停止微信转发");
+};
+$("btnWxRefresh").onclick = () => { refreshWx(); refreshStatus(); toast("已刷新"); };
+
+$("btnSaveConfig").onclick = async () => {
+  await fetch("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: $("cfgKey").value.trim(),
+      base_url: $("cfgBase").value.trim(),
+      model: $("cfgModel").value.trim()
+    })
+  });
+  $("cfgKey").value = "";
+  await refreshStatus();
+  toast("设置已保存");
+};
+
+let selectedFiles = [];
+function renderFiles() {
+  $("fileList").innerHTML = selectedFiles.map((f) => '<span class="filetag">' + escapeHtml(f.name) + "</span>").join("");
+  $("btnUpload").disabled = selectedFiles.length === 0;
+}
+$("fileInput").addEventListener("change", () => {
+  selectedFiles = Array.from($("fileInput").files);
+  renderFiles();
+});
+const drop = $("drop");
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("over");
+}));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+}));
+drop.addEventListener("drop", (e) => {
+  selectedFiles = Array.from(e.dataTransfer.files || []);
+  renderFiles();
+});
+
+$("btnUpload").onclick = async () => {
+  if (!selectedFiles.length) { toast("请先选择聊天记录文件"); return; }
+  const form = new FormData();
+  for (const file of selectedFiles) form.append("files", file);
+  $("btnUpload").disabled = true;
+  log("正在上传 " + selectedFiles.length + " 个文件…");
+  try {
+    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "上传失败");
+    log("上传完成：" + data.saved.join(", "));
+    $("btnDistill").disabled = false;
+    toast("上传完成");
+  } catch (e) {
+    log("上传失败：" + e.message);
+  } finally {
+    $("btnUpload").disabled = false;
+  }
+};
+
+$("btnPaste").onclick = async () => {
+  const content = $("pasteInput").value.trim();
+  if (!content) { toast("粘贴内容为空"); return; }
+  $("btnPaste").disabled = true;
+  log("正在保存粘贴内容…");
+  try {
+    const res = await fetch("/api/paste", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: content })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "保存失败");
+    log("粘贴内容已加入：" + data.chars + " 字");
+    $("btnDistill").disabled = false;
+    toast("已加入粘贴内容");
+  } catch (e) {
+    log("失败：" + e.message);
+  } finally {
+    $("btnPaste").disabled = false;
+  }
+};
+
+$("btnDistill").onclick = async () => {
+  $("btnDistill").disabled = true;
+  const target = $("targetInput").value.trim() || null;
+  log("正在解析素材…");
+  try {
+    const ingestRes = await fetch("/api/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target })
+    });
+    const ingestData = await ingestRes.json();
+    if (!ingestRes.ok) throw new Error(ingestData.detail || "解析失败");
+    log("解析完成：共 " + ingestData.total + " 条消息，目标对象 = " + ingestData.target);
+    if (!hasKey) log("未检测到 API Key，仅生成统计画像。填入 Key 后可重新蒸馏得到完整人格。");
+    log("正在蒸馏人格（调用大模型，可能需要十几秒）…");
+    const distillRes = await fetch("/api/distill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ use_llm: hasKey })
+    });
+    const distillData = await distillRes.json();
+    if (!distillRes.ok) throw new Error(distillData.detail || "蒸馏失败");
+    log("蒸馏完成：样本 " + distillData.profile.message_count + " 条，检索对 " + distillData.profile.pair_count + " 条");
+    log("人格已就绪，微信里可直接发消息。");
+    await refreshStatus();
+    toast("人格已就绪");
+  } catch (e) {
+    log("失败：" + e.message);
+    $("btnDistill").disabled = false;
+  }
+};
+
+let skillOpen = false;
+$("btnSkill").onclick = async () => {
+  const box = $("skillBox");
+  if (skillOpen) { box.style.display = "none"; skillOpen = false; $("btnSkill").textContent = "查看人格卡"; return; }
+  const res = await fetch("/api/skill");
+  if (!res.ok) { toast("尚未生成人格"); return; }
+  const data = await res.json();
+  box.textContent = data.skill;
+  box.style.display = "block";
+  skillOpen = true;
+  $("btnSkill").textContent = "收起人格卡";
+};
+
+refreshStatus();
+refreshWx();
+setInterval(() => { refreshWx(); }, 5000);
+</script>
+</body>
+</html>

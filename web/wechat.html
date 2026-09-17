@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>微信绑定 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div class="shell">
+    <div class="grid">
+      <section class="glass card col-6">
+        <h2>绑定我的微信</h2>
+        <div class="sub">每个人使用独立的微信运行环境，消息只会回复给本人。</div>
+        <div id="statusLine" class="hint">状态加载中…</div>
+        <div class="btnrow">
+          <button class="btn primary" id="loginBtn">获取二维码</button>
+          <button class="btn" id="startBtn">启动转发</button>
+          <button class="btn" id="stopBtn">停止转发</button>
+        </div>
+        <div id="qrBox"></div>
+        <div class="log" id="log">等待操作…</div>
+      </section>
+
+      <section class="glass card col-6">
+        <h2>转发到哪个人格</h2>
+        <div class="sub">微信消息会由当前激活的人格回复。</div>
+        <div id="personaList"></div>
+        <div class="divider">使用说明</div>
+        <div class="hint">
+          1. 点「获取二维码」，用手机微信扫码并确认登录。<br />
+          2. 登录成功后点「启动转发」。<br />
+          3. 之后发给该微信账号的消息，会由你当前的人格回复。<br />
+          4. 机器人需要保持运行，请在常开设备上运行本服务。
+        </div>
+      </section>
+    </div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    let personas = [];
+    let activeId = null;
+    const logBox = $("log");
+    let pollTimer = null;
+
+    function log(message) { logBox.textContent = message; }
+
+    function statusText(status) {
+      if (!status.available) return "未找到 weclaw，请先安装";
+      const phase = { idle: "未登录", starting: "正在生成二维码", "waiting-scan": "等待扫码", "logged-in": "已登录", running: "运行中", failed: "失败", unavailable: "不可用" }[status.phase] || status.phase;
+      return "阶段：" + phase + " · 转发：" + (status.running ? "运行中" : "已停止");
+    }
+
+    async function refresh() {
+      try {
+        const status = await api("/api/wechat/status");
+        $("statusLine").textContent = statusText(status);
+        if (status.qr_svg) {
+          $("qrBox").innerHTML = '<div class="qr">' + status.qr_svg + "</div>";
+        }
+        if (status.log || status.bridge_log) {
+          log((status.log || "") + (status.bridge_log ? "\n" + status.bridge_log : ""));
+        }
+        if (status.phase === "running" || status.running) startPolling();
+      } catch (error) { $("statusLine").textContent = error.message; }
+    }
+
+    function startPolling() {
+      if (pollTimer) return;
+      pollTimer = setInterval(refresh, 4000);
+    }
+
+    async function loadPersonas() {
+      const data = await me();
+      personas = data.personas;
+      activeId = data.active_persona_id;
+      $("personaList").innerHTML = personas.length
+        ? personas.map((p) => `<div class="persona-item ${p.id === activeId ? "active" : ""}">
+            <div><div class="name">${p.name}</div><div class="meta">对象：${p.target_name || p.name}</div></div>
+            <div class="spacer"></div>
+            ${p.id === activeId ? '<span class="pill">当前使用</span>' : `<button class="btn ghost" data-id="${p.id}">设为当前</button>`}
+          </div>`).join("")
+        : '<div class="hint">还没有人格，先到「训练人格」创建并蒸馏一个。</div>';
+      $("personaList").querySelectorAll("[data-id]").forEach((button) => {
+        button.onclick = async () => {
+          await api(`/api/personas/${button.dataset.id}/activate`, { method: "POST" });
+          await loadPersonas();
+          toast("已切换");
+        };
+      });
+    }
+
+    $("loginBtn").onclick = async () => {
+      log("正在生成二维码…");
+      try {
+        const status = await api("/api/wechat/login", { method: "POST" });
+        if (status.qr_svg) $("qrBox").innerHTML = '<div class="qr">' + status.qr_svg + "</div>";
+        log(status.log || statusText(status));
+        startPolling();
+      } catch (error) { log(error.message); }
+    };
+
+    $("startBtn").onclick = async () => {
+      try {
+        const result = await api("/api/wechat/start", { method: "POST" });
+        log(result.output || "已启动");
+        toast("已启动");
+        refresh();
+      } catch (error) { log(error.message); }
+    };
+
+    $("stopBtn").onclick = async () => {
+      try {
+        const result = await api("/api/wechat/stop", { method: "POST" });
+        log(result.output || "已停止");
+        toast("已停止");
+        refresh();
+      } catch (error) { log(error.message); }
+    };
+
+    mountTabbar("/app/wechat");
+    loadPersonas().catch((error) => toast(error.message));
+    refresh();
+  </script>
+</body>
+</html>

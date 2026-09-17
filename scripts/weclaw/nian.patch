@@ -1,0 +1,238 @@
+diff --git a/agent/http_agent.go b/agent/http_agent.go
+index 6cdd694..6fff8fa 100644
+--- a/agent/http_agent.go
++++ b/agent/http_agent.go
+@@ -91,6 +91,7 @@ func (a *HTTPAgent) Chat(ctx context.Context, conversationID string, message str
+ 	reqBody := map[string]interface{}{
+ 		"model":    a.model,
+ 		"messages": messages,
++		"user":     conversationID,
+ 	}
+ 
+ 	data, err := json.Marshal(reqBody)
+diff --git a/cmd/start.go b/cmd/start.go
+index 48fc818..2377840 100644
+--- a/cmd/start.go
++++ b/cmd/start.go
+@@ -138,6 +138,12 @@ func runStart(cmd *cobra.Command, args []string) error {
+ 		log.Printf("Image save directory: %s", cfg.SaveDir)
+ 	}
+ 
++	// Forward incoming images/stickers to a platform endpoint if configured
++	if cfg.MediaEndpoint != "" {
++		handler.SetMediaEndpoint(cfg.MediaEndpoint)
++		log.Printf("Media endpoint: %s", cfg.MediaEndpoint)
++	}
++
+ 	// Start default agent initialization in background so monitors can start immediately
+ 	go func() {
+ 		if cfg.DefaultAgent == "" {
+diff --git a/config/config.go b/config/config.go
+index 53fc148..ba67990 100644
+--- a/config/config.go
++++ b/config/config.go
+@@ -10,10 +10,11 @@ import (
+ 
+ // Config holds the application configuration.
+ type Config struct {
+-	DefaultAgent string                 `json:"default_agent"`
+-	APIAddr      string                 `json:"api_addr,omitempty"`
+-	SaveDir      string                 `json:"save_dir,omitempty"`
+-	Agents       map[string]AgentConfig `json:"agents"`
++	DefaultAgent  string                 `json:"default_agent"`
++	APIAddr       string                 `json:"api_addr,omitempty"`
++	SaveDir       string                 `json:"save_dir,omitempty"`
++	MediaEndpoint string                 `json:"media_endpoint,omitempty"`
++	Agents        map[string]AgentConfig `json:"agents"`
+ }
+ 
+ // AgentConfig holds configuration for a single agent.
+@@ -119,6 +120,9 @@ func loadEnv(cfg *Config) {
+ 	if v := os.Getenv("WECLAW_SAVE_DIR"); v != "" {
+ 		cfg.SaveDir = v
+ 	}
++	if v := os.Getenv("WECLAW_MEDIA_ENDPOINT"); v != "" {
++		cfg.MediaEndpoint = v
++	}
+ }
+ 
+ // Save saves the configuration to disk.
+diff --git a/messaging/handler.go b/messaging/handler.go
+index dcfee34..62a6eed 100644
+--- a/messaging/handler.go
++++ b/messaging/handler.go
+@@ -1,9 +1,12 @@
+ package messaging
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"fmt"
+ 	"log"
++	"mime/multipart"
++	"net/http"
+ 	"os"
+ 	"path/filepath"
+ 	"strings"
+@@ -41,6 +44,7 @@ type Handler struct {
+ 	saveDefault   SaveDefaultFunc
+ 	contextTokens sync.Map   // map[userID]contextToken
+ 	saveDir       string     // directory to save images/files to
++	mediaEndpoint string     // platform endpoint to forward incoming images/stickers to
+ 	seenMsgs      sync.Map   // map[int64]time.Time — dedup by message_id
+ }
+ 
+@@ -59,6 +63,12 @@ func (h *Handler) SetSaveDir(dir string) {
+ 	h.saveDir = dir
+ }
+ 
++// SetMediaEndpoint sets the platform endpoint that receives incoming images/stickers.
++// When set, incoming images are forwarded there instead of being only saved locally.
++func (h *Handler) SetMediaEndpoint(endpoint string) {
++	h.mediaEndpoint = endpoint
++}
++
+ // cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
+ func (h *Handler) cleanSeenMsgs() {
+ 	cutoff := time.Now().Add(-5 * time.Minute)
+@@ -287,12 +297,19 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
+ 	}
+ 	if text == "" {
+ 		// Check for image message
+-		if img := extractImage(msg); img != nil && h.saveDir != "" {
+-			h.handleImageSave(ctx, client, msg, img)
++		if img := extractImage(msg); img != nil {
++			if h.mediaEndpoint != "" && h.forwardImage(ctx, msg, img) {
++				// 图片已转发存档；用占位文本继续走 agent，是否回应由平台决定。
++				text = "[图片]"
++			} else if h.saveDir != "" {
++				h.handleImageSave(ctx, client, msg, img)
++				return
++			}
++		}
++		if text == "" {
++			log.Printf("[handler] received non-text message from %s, skipping", msg.FromUserID)
+ 			return
+ 		}
+-		log.Printf("[handler] received non-text message from %s, skipping", msg.FromUserID)
+-		return
+ 	}
+ 
+ 	log.Printf("[handler] received from %s: %q", msg.FromUserID, truncate(text, 80))
+@@ -723,25 +740,77 @@ func extractVoiceText(msg ilink.WeixinMessage) string {
+ 	return ""
+ }
+ 
++func downloadImage(ctx context.Context, img *ilink.ImageItem) ([]byte, error) {
++	if img.URL != "" {
++		data, _, err := downloadFile(ctx, img.URL)
++		return data, err
++	}
++	if img.Media != nil && img.Media.EncryptQueryParam != "" {
++		return DownloadFileFromCDN(ctx, img.Media.EncryptQueryParam, img.Media.AESKey)
++	}
++	return nil, fmt.Errorf("image has no URL or media info")
++}
++
++// forwardImage downloads an incoming image/sticker and POSTs it to the configured
++// platform media endpoint so the bound persona can save it. Returns true when the
++// endpoint accepted the upload.
++func (h *Handler) forwardImage(ctx context.Context, msg ilink.WeixinMessage, img *ilink.ImageItem) bool {
++	data, err := downloadImage(ctx, img)
++	if err != nil {
++		log.Printf("[handler] failed to download image from %s: %v", msg.FromUserID, err)
++		return false
++	}
++	ext := detectImageExt(data)
++	fileName := "wechat-" + time.Now().Format("20060102-150405") + ext
++
++	var body bytes.Buffer
++	writer := multipart.NewWriter(&body)
++	part, err := writer.CreateFormFile("file", fileName)
++	if err != nil {
++		log.Printf("[handler] build media form failed: %v", err)
++		return false
++	}
++	if _, err := part.Write(data); err != nil {
++		log.Printf("[handler] write media form failed: %v", err)
++		return false
++	}
++	if err := writer.Close(); err != nil {
++		log.Printf("[handler] close media form failed: %v", err)
++		return false
++	}
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.mediaEndpoint, &body)
++	if err != nil {
++		log.Printf("[handler] build media request failed: %v", err)
++		return false
++	}
++	req.Header.Set("Content-Type", writer.FormDataContentType())
++	req.Header.Set("X-WeChat-From", msg.FromUserID)
++	if msg.MessageID != 0 {
++		req.Header.Set("X-WeChat-Message-ID", fmt.Sprintf("%d", msg.MessageID))
++	}
++
++	client := &http.Client{Timeout: 60 * time.Second}
++	resp, err := client.Do(req)
++	if err != nil {
++		log.Printf("[handler] forward media to platform failed: %v", err)
++		return false
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		log.Printf("[handler] platform rejected media: HTTP %d", resp.StatusCode)
++		return false
++	}
++	log.Printf("[handler] forwarded image from %s to platform (%d bytes)", msg.FromUserID, len(data))
++	return true
++}
++
+ func (h *Handler) handleImageSave(ctx context.Context, client *ilink.Client, msg ilink.WeixinMessage, img *ilink.ImageItem) {
+ 	clientID := NewClientID()
+ 	log.Printf("[handler] received image from %s, saving to %s", msg.FromUserID, h.saveDir)
+ 
+ 	// Download image data
+-	var data []byte
+-	var err error
+-
+-	if img.URL != "" {
+-		// Direct URL download
+-		data, _, err = downloadFile(ctx, img.URL)
+-	} else if img.Media != nil && img.Media.EncryptQueryParam != "" {
+-		// CDN encrypted download
+-		data, err = DownloadFileFromCDN(ctx, img.Media.EncryptQueryParam, img.Media.AESKey)
+-	} else {
+-		log.Printf("[handler] image has no URL or media info from %s", msg.FromUserID)
+-		return
+-	}
+-
++	data, err := downloadImage(ctx, img)
+ 	if err != nil {
+ 		log.Printf("[handler] failed to download image from %s: %v", msg.FromUserID, err)
+ 		reply := fmt.Sprintf("Failed to save image: %v", err)
+diff --git a/messaging/sender.go b/messaging/sender.go
+index cd439b2..4e5b017 100644
+--- a/messaging/sender.go
++++ b/messaging/sender.go
+@@ -4,6 +4,7 @@ import (
+ 	"context"
+ 	"fmt"
+ 	"log"
++	"strings"
+ 
+ 	"github.com/fastclaw-ai/weclaw/ilink"
+ 	"github.com/google/uuid"
+@@ -45,6 +46,12 @@ func SendTextReply(ctx context.Context, client *ilink.Client, toUserID, text, co
+ 	// Convert markdown to plain text for WeChat display
+ 	plainText := MarkdownToPlainText(text)
+ 
++	// Empty text is used for media-only replies (e.g. a lone sticker); skip the
++	// text bubble instead of sending an empty message.
++	if strings.TrimSpace(plainText) == "" {
++		return nil
++	}
++
+ 	req := &ilink.SendMessageRequest{
+ 		Msg: ilink.SendMsg{
+ 			FromUserID:   client.BotID(),

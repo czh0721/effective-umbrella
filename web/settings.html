@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>账号与设置 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+</head>
+<body>
+  <div class="shell" style="padding-top:22px">
+    <section class="glass card">
+      <div class="row">
+        <div class="avatar" id="userAvatar" style="border-radius:18px">念</div>
+        <div class="flex1">
+          <b id="userName" style="font-size:16px">加载中…</b>
+          <div class="row" style="gap:7px;margin-top:3px">
+            <span class="badge b-vip" id="userRole" style="display:none">管理员</span>
+            <span class="mini" id="userSub">念念用户</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="stat3 block stagger" id="statStrip">
+      <div><b data-count="0">0</b><span>分身</span></div>
+      <div><b data-count="0">0</b><span>微信在线</span></div>
+      <div><b data-count="0">0</b><span>已绑定</span></div>
+    </div>
+
+    <div class="group-title">资产</div>
+    <div class="asset-card block stagger" id="creditCard"></div>
+    <section class="asset-card block stagger">
+      <div class="aw-head">
+        <span class="aw-title">兑换念念币</span>
+        <span class="aw-note">兑换码是念念币的来源</span>
+      </div>
+      <div class="redeem-row">
+        <input id="redeemInput" placeholder="输入兑换码" autocomplete="off" spellcheck="false" />
+        <button class="btn primary" id="redeemBtn">兑换</button>
+      </div>
+      <div class="aw-divider"></div>
+      <div class="aw-head">
+        <span class="aw-title">积分套餐</span>
+        <span class="aw-note">用念念币兑换 · 到期未用清零</span>
+      </div>
+      <div class="credit-pack-list" id="packageList"></div>
+      <div class="aw-divider"></div>
+      <div class="aw-head">
+        <span class="aw-title">蒸馏券</span>
+        <span class="aw-note" id="ticketPrice">购买蒸馏券</span>
+      </div>
+      <div class="pack-row" id="ticketRow">
+        <div class="pack-main">
+          <div class="pack-name">剩余 <b id="ticketCount">0</b> 张</div>
+          <div class="pack-sub" id="ticketHint">每次蒸馏消耗 1 张，失败自动退还</div>
+        </div>
+        <button class="btn small primary" id="buyTicketBtn">购买</button>
+      </div>
+    </section>
+
+    <div class="group-title">服务</div>
+    <section class="setting-group block">
+      <div class="g-row">
+        <span class="li-ico"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4"/><path d="M11 11l9 9M17 17l2-2M14 20l2-2"/></svg></span>
+        <div class="g-text"><div class="g-title">模型服务</div><div class="g-sub" id="keyHint">由平台统一提供</div></div>
+        <div class="spacer"></div><span class="pill" id="platformPill">平台提供</span>
+      </div>
+      <div class="g-row click" id="channelRow">
+        <span class="li-ico" style="background:rgba(40,196,108,.12);color:var(--green)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5A8.4 8.4 0 0 1 12.5 20a9 9 0 0 1-3.2-.6L4 21l1.6-4.2A8.4 8.4 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z"/><path d="M8.5 10.5h.01M14 10.5h.01"/></svg></span>
+        <div class="g-text"><div class="g-title">微信渠道</div><div class="g-sub" id="wxHint">查看绑定与转发状态</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="memoryRow">
+        <span class="li-ico" style="background:rgba(61,139,255,.12);color:var(--blue)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 0 0-6 0 3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1z"/><path d="M12 5a3 3 0 0 1 6 0 3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1z"/></svg></span>
+        <div class="g-text"><div class="g-title">长期记忆</div><div class="g-sub">按联系人查看与清理</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="timelineRow">
+        <span class="li-ico" style="background:rgba(244,114,182,.14);color:var(--pink)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span>
+        <div class="g-text"><div class="g-title">回忆时间线</div><div class="g-sub">把聊天、记忆与主动消息串起来</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+    </section>
+
+    <div class="group-title">账号</div>
+    <section class="setting-group block">
+      <div class="g-row click" id="openPass">
+        <span class="li-ico"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></span>
+        <div class="g-text"><div class="g-title">修改密码</div><div class="g-sub">定期更换更安全</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="twofaRow">
+        <span class="li-ico" style="background:rgba(61,139,255,.12);color:var(--blue)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/><path d="M9.5 12l1.8 1.8L15 10"/></svg></span>
+        <div class="g-text"><div class="g-title">两步验证</div><div class="g-sub" id="twofaSub">使用验证器 App 保护账号</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="exportBtn">
+        <span class="li-ico" style="background:rgba(155,123,255,.12);color:var(--v2)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 11l5 5 5-5"/><path d="M4 20h16"/></svg></span>
+        <div class="g-text"><div class="g-title">导出人格档案</div><div class="g-sub">打包为 zip 下载</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="logoutAllRow">
+        <span class="li-ico" style="background:rgba(142,142,153,.12);color:#666"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="10" rx="2"/><path d="M8 20h6"/><path d="M17 12h4"/><path d="M19 10l2 2-2 2"/></svg></span>
+        <div class="g-text"><div class="g-title">退出全部设备</div><div class="g-sub">让所有已登录的设备立即失效</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="logoutRow">
+        <span class="li-ico" style="background:rgba(255,69,58,.12);color:var(--red)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-3"/><path d="M10 17l-5-5 5-5"/><path d="M5 12h12"/></svg></span>
+        <div class="g-text"><div class="g-title" style="color:var(--red)">退出登录</div></div>
+      </div>
+      <div class="g-row click" id="deleteBtn">
+        <span class="li-ico" style="background:rgba(255,69,58,.12);color:var(--red)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></span>
+        <div class="g-text"><div class="g-title" style="color:var(--red)">注销账号</div><div class="g-sub">人格与素材会移出，不可撤销</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+    </section>
+
+    <div class="group-title">帮助与合规</div>
+    <section class="setting-group block">
+      <div class="g-row click" id="helpRow">
+        <span class="li-ico" style="background:rgba(124,92,255,.12);color:var(--v2)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7"/><path d="M12 17h.01"/></svg></span>
+        <div class="g-text"><div class="g-title">使用帮助</div><div class="g-sub">常见问题与联系客服</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <div class="g-row click" id="reportRow">
+        <span class="li-ico" style="background:rgba(255,159,46,.14);color:var(--orange)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 16H3z"/><path d="M12 9v4M12 16.5h.01"/></svg></span>
+        <div class="g-text"><div class="g-title">举报与反馈</div><div class="g-sub">违规内容或使用问题</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+      <a class="g-row click" href="/privacy">
+        <span class="li-ico" style="background:rgba(40,196,108,.12);color:var(--green)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg></span>
+        <div class="g-text"><div class="g-title">隐私政策</div><div class="g-sub">我们如何处理你的数据</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </a>
+      <a class="g-row click" href="/terms">
+        <span class="li-ico" style="background:rgba(61,139,255,.12);color:var(--blue)"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg></span>
+        <div class="g-text"><div class="g-title">服务条款</div><div class="g-sub">使用规范与责任说明</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </a>
+      <div class="g-row click" id="adminRow" style="display:none">
+        <span class="li-ico"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+        <div class="g-text"><div class="g-title">管理后台</div><div class="g-sub">举报处理、用户与审计</div></div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>
+    </section>
+
+    <p class="mini" style="text-align:center;margin-top:14px">念念 Nian v1.0 · 仅供个人情感陪伴</p>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    let activePersonaId = null;
+
+    let lastCredits = null;
+
+    function renderCredits(credits) {
+      const data = credits || { balance: 0, used: 0, granted: 0, ratio: 0, per_turn_cost: 0, coins: 0, packages: [], ledger: [], coin_ledger: [] };
+      lastCredits = data;
+      const cost = Number(data.per_turn_cost) || 0;
+      const balance = Number(data.balance) || 0;
+      const coins = Number(data.coins) || 0;
+      const low = cost > 0 && balance < cost * 5;
+      const pct = Math.max(0, Math.min(100, Math.round((Number(data.remaining_ratio) || 0) * 100)));
+      const cap = Number((data.summary || {}).granted) || 0;
+      const note = !data.platform_ready ? "平台模型未启用"
+        : (cost > 0 ? "每轮消耗 " + cost + " 积分" : "当前免费");
+      const quota = cap > 0 && cap >= balance ? balance + " / " + cap : pct + "%";
+      const soon = Number(data.expiring_soon) || 0;
+      const nextExpiry = (data.next_expiry || "").slice(0, 10);
+      const expiryLine = (nextExpiry || soon > 0)
+        ? `<div class="aw-expiry${soon > 0 ? " warn" : ""}">
+             <span>最近到期</span>
+             <b>${escapeHtml(nextExpiry || "—")}${soon > 0 ? " · 即将清零 " + soon : ""}</b>
+           </div>`
+        : "";
+      $("creditCard").innerHTML = `
+        <div class="aw-head">
+          <span class="aw-title">我的资产</span>
+          <button class="aw-link" id="ledgerLink" type="button">明细<svg class="aw-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+        </div>
+        <div class="aw-grid">
+          <button class="aw-metric" id="creditPod" type="button">
+            <span class="aw-label"><i class="aw-dot credit"></i>可用积分</span>
+            <b class="aw-value" id="creditValue">0</b>
+            <span class="aw-sub">${escapeHtml(note)}</span>
+          </button>
+          <button class="aw-metric" id="coinPod" type="button">
+            <span class="aw-label"><i class="aw-dot coin"></i>念念币</span>
+            <b class="aw-value" id="coinValue">0</b>
+            <span class="aw-sub">兑换码获得</span>
+          </button>
+        </div>
+        <div class="aw-meter">
+          <div class="aw-meter-head">
+            <span class="aw-meter-label">积分余量</span>
+            <span class="aw-meter-val${low ? " warn" : ""}">${quota}${low ? " · 余额不足" : ""}</span>
+          </div>
+          <div class="aw-track"><i style="width:${pct}%"></i></div>
+        </div>
+        ${expiryLine}`;
+      countUp($("coinValue"), coins);
+      countUp($("creditValue"), balance);
+      $("coinPod").onclick = () => openLedger("coin");
+      $("creditPod").onclick = () => openLedger("credit");
+      $("ledgerLink").onclick = () => openLedger("credit");
+      $("keyHint").textContent = data.platform_ready
+        ? ("由平台提供 · " + (data.platform_model || "deepseek-chat"))
+        : "平台模型尚未启用，请联系管理员";
+      $("platformPill").textContent = data.platform_ready ? "平台提供" : "未启用";
+      const packs = data.packages || [];
+      $("packageList").innerHTML = packs.length ? packs.map((p, i) => {
+        const featured = !!p.badge;
+        const short = Number(p.coins) > coins;
+        const days = Number(p.validity_days) || 0;
+        const validity = days > 0 ? " · 有效期 " + days + " 天" : "";
+        return `
+        <div class="pack-row" style="animation-delay:${i * 40}ms">
+          <div class="pack-main">
+            <div class="pack-name">${escapeHtml(p.name)}${featured ? ' <span class="pack-tag">' + escapeHtml(p.badge) + "</span>" : ""}</div>
+            <div class="pack-sub">${p.credits} 积分${validity}${short ? ' · <span class="pack-warn">念念币不足</span>' : ""}</div>
+          </div>
+          <div class="pack-price">${p.coins > 0 ? "<b>" + p.coins + "</b><span>念念币</span>" : "<b>免费</b>"}</div>
+          <button class="btn small ${featured ? "primary" : "ghost"}" data-buy="${p.id}"${short ? " disabled" : ""}>兑换</button>
+        </div>`;
+      }).join("") : '<div class="mini" style="padding:10px 0">暂无可用套餐</div>';
+      $("packageList").querySelectorAll("[data-buy]").forEach((btn) => {
+        btn.onclick = async () => {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const idem = btn.dataset.idem || (btn.dataset.idem = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2)));
+          try {
+            await api("/api/packages/" + btn.dataset.buy + "/purchase", { method: "POST", headers: { "Idempotency-Key": idem } });
+            toast("套餐已到账");
+            await load();
+          } catch (error) { toast(error.message); btn.disabled = false; }
+        };
+      });
+      renderTickets(data);
+    }
+
+    function renderTickets(data) {
+      const info = data.distill_tickets || {};
+      const price = Number(info.price) || 0;
+      const count = Number(info.balance) || 0;
+      const cost = Number(data.coins) || 0;
+      $("ticketCount").textContent = count;
+      $("ticketPrice").textContent = price > 0 ? ("单张 " + price + " 念念币") : "当前免费";
+      $("ticketHint").textContent = price > 0 && cost < price
+        ? "念念币不足，先兑换念念币再购买"
+        : "每次蒸馏消耗 1 张，失败自动退还";
+      const btn = $("buyTicketBtn");
+      btn.textContent = price > 0 ? ("购买 · " + price) : "领取";
+      btn.disabled = price > 0 && cost < price;
+      btn.onclick = async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        const idem = crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2);
+        try {
+          await api("/api/distill-tickets/purchase", {
+            method: "POST",
+            headers: { "Idempotency-Key": idem },
+            body: JSON.stringify({ quantity: 1, client_id: idem }),
+          });
+          toast("蒸馏券已到账");
+          await load();
+        } catch (error) { toast(error.message); btn.disabled = false; }
+      };
+    }
+
+    function ledgerHtml(items, emptyText) {
+      const list = items || [];
+      if (!list.length) return `<div class="mini" style="padding:8px 0">${emptyText}</div>`;
+      return list.map((item) => {
+        const up = Number(item.delta) > 0;
+        const after = item.balance_after != null ? ` · 余 ${item.balance_after}` : "";
+        return `<div class="cl-row"><div class="cl-reason">${escapeHtml(item.reason || "积分变动")}<div class="mini">${fmtDate(item.created_at)}${after}</div></div><div class="cl-delta ${up ? "up" : "down"}">${up ? "+" : ""}${item.delta}</div></div>`;
+      }).join("");
+    }
+
+    function openLedger(kind) {
+      const data = lastCredits || {};
+      const coin = kind === "coin";
+      const stats = (coin ? data.coins_summary : data.summary) || {};
+      const summary = coin
+        ? `当前 ${data.coins || 0} · 累计获得 ${stats.granted || 0} · 已使用 ${stats.used || 0}`
+        : `剩余 ${data.balance || 0} · 累计获得 ${stats.granted || 0} · 已使用 ${stats.used || 0}`;
+      openModal(
+        coin ? "念念币明细" : "积分明细",
+        `<div class="mini" style="margin-bottom:10px">${escapeHtml(summary)}</div>
+         <div class="mini" style="margin-bottom:12px">兑换码是念念币的来源；用念念币兑换套餐即可获得积分。</div>
+         <div class="credit-ledger">${ledgerHtml(coin ? data.coin_ledger : data.ledger, coin ? "暂无念念币记录" : "暂无积分记录")}</div>`,
+      );
+    }
+
+    async function load() {
+      const data = await me();
+      const name = data.user.username || data.user.nickname || "未设置";
+      $("userName").textContent = name;
+      $("userAvatar").textContent = name.slice(0, 1).toUpperCase();
+      if (data.user.role === "admin") { $("userRole").style.display = ""; $("adminRow").style.display = ""; }
+      const personas = data.personas || [];
+      activePersonaId = data.active_persona_id || (personas[0] && personas[0].id) || null;
+      $("statStrip").innerHTML = `
+        <div><b data-count="${personas.length}">0</b><span>分身</span></div>
+        <div><b data-count="${data.wechat.running ? 1 : 0}">0</b><span>微信在线</span></div>
+        <div><b data-count="${data.wechat.bound ? 1 : 0}">0</b><span>已绑定</span></div>`;
+      animateCounts($("statStrip"));
+      $("wxHint").textContent = data.wechat.bound ? (data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未在线") : "尚未绑定微信";
+
+      const credits = await api("/api/credits");
+      renderCredits(credits);
+      await refreshTwofa();
+    }
+
+    $("channelRow").onclick = () => {
+      if (activePersonaId) window.location.href = "/app/agent/" + activePersonaId + "#channel";
+      else window.location.href = "/app?create=distill";
+    };
+    $("memoryRow").onclick = () => { window.location.href = "/app/memory"; };
+    $("timelineRow").onclick = () => {
+      window.location.href = activePersonaId ? "/app/timeline?persona=" + activePersonaId : "/app/timeline";
+    };
+
+    $("redeemBtn").onclick = async () => {
+      const code = $("redeemInput").value.trim();
+      if (!code) { toast("请输入兑换码"); return; }
+      const button = $("redeemBtn");
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const result = await api("/api/redeem", { method: "POST", body: JSON.stringify({ code }) });
+        toast("已到账 " + result.amount + " 念念币");
+        $("redeemInput").value = "";
+        await load();
+      } catch (error) { toast(error.message); }
+      finally { button.disabled = false; }
+    };
+
+    $("openPass").onclick = () => {
+      openModal("修改密码", `
+        <div class="field"><label>当前密码</label><input id="curPass" type="password" autocomplete="off" /></div>
+        <div class="field"><label>新密码</label><input id="newPass" type="password" autocomplete="new-password" /></div>
+        <div class="btnrow"><button class="btn primary" id="savePass" style="flex:1">确认修改</button></div>`,
+        (body, mask) => {
+          body.querySelector("#savePass").onclick = async () => {
+            try {
+              await api("/api/account/password", {
+                method: "POST",
+                body: JSON.stringify({ current: body.querySelector("#curPass").value, new: body.querySelector("#newPass").value }),
+              });
+              closeModal(mask);
+              toast("密码已修改");
+            } catch (error) { toast(error.message); }
+          };
+        });
+    };
+
+    $("exportBtn").onclick = () => {
+      if (!activePersonaId) { toast("先创建一个分身再导出"); return; }
+      window.location.href = "/api/export";
+    };
+
+    async function refreshTwofa() {
+      try {
+        const data = await api("/api/account/security");
+        $("twofaSub").textContent = data.totp_enabled ? "已开启 · 登录需要动态验证码" : "使用验证器 App 保护账号";
+      } catch (error) { /* 忽略 */ }
+    }
+
+    function openEnableTwofa() {
+      api("/api/account/2fa/setup", { method: "POST" }).then((data) => {
+        openModal("开启两步验证", `
+          <div class="sub">用验证器 App（如 Google Authenticator）扫描或手动输入以下密钥，然后填写生成的 6 位验证码。</div>
+          <div class="field"><label>密钥</label><input id="totpSecret" readonly value="${escapeHtml(data.secret)}" /></div>
+          <div class="field"><label>6 位验证码</label><input id="totpCode" inputmode="numeric" maxlength="6" placeholder="000000" /></div>
+          <div class="btnrow"><button class="btn primary" id="totpOk" style="flex:1">确认开启</button></div>`,
+          (body, mask) => {
+            body.querySelector("#totpOk").onclick = async () => {
+              try {
+                await api("/api/account/2fa/enable", {
+                  method: "POST",
+                  body: JSON.stringify({ code: body.querySelector("#totpCode").value.trim() }),
+                });
+                closeModal(mask);
+                toast("两步验证已开启");
+                await refreshTwofa();
+              } catch (error) { toast(error.message); }
+            };
+          });
+      }).catch((error) => toast(error.message));
+    }
+
+    function openDisableTwofa() {
+      openModal("关闭两步验证", `
+        <div class="sub">关闭后登录只需密码。请输入当前密码确认。</div>
+        <div class="field"><label>当前密码</label><input id="totpPass" type="password" autocomplete="off" /></div>
+        <div class="btnrow"><button class="btn danger" id="totpOff" style="flex:1">确认关闭</button></div>`,
+        (body, mask) => {
+          body.querySelector("#totpOff").onclick = async () => {
+            try {
+              await api("/api/account/2fa/disable", {
+                method: "POST",
+                body: JSON.stringify({ password: body.querySelector("#totpPass").value }),
+              });
+              closeModal(mask);
+              toast("两步验证已关闭");
+              await refreshTwofa();
+            } catch (error) { toast(error.message); }
+          };
+        });
+    }
+
+    $("twofaRow").onclick = async () => {
+      let enabled = false;
+      try {
+        const data = await api("/api/account/security");
+        enabled = !!data.totp_enabled;
+      } catch (error) { toast(error.message); return; }
+      if (enabled) openDisableTwofa(); else openEnableTwofa();
+    };
+
+    $("deleteBtn").onclick = () => {
+      openModal("注销账号", `
+        <div class="sub">此操作不可撤销，请输入密码确认。</div>
+        <div class="field"><label>密码</label><input id="delPass" type="password" autocomplete="off" /></div>
+        <div class="btnrow"><button class="btn danger" id="delOk" style="flex:1">确认注销</button></div>`,
+        (body, mask) => {
+          body.querySelector("#delOk").onclick = async () => {
+            if (!confirm("确定注销账号？人格与素材会移出。")) return;
+            try {
+              await api("/api/account/delete", {
+                method: "POST",
+                body: JSON.stringify({ current: body.querySelector("#delPass").value, new: "" }),
+              });
+              window.location.href = "/login";
+            } catch (error) { toast(error.message); }
+          };
+        });
+    };
+
+    $("logoutRow").onclick = async () => {
+      await api("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    };
+    $("logoutAllRow").onclick = async () => {
+      if (!confirm("确定退出所有设备？其他设备上的登录会立即失效。")) return;
+      try {
+        await api("/api/account/logout-all", { method: "POST" });
+        window.location.href = "/login";
+      } catch (error) { toast(error.message); }
+    };
+
+    $("adminRow").onclick = () => { window.location.href = "/admin"; };
+
+    $("helpRow").onclick = () => {
+      openModal("使用帮助", `
+        <div class="faq">
+          <div class="faq-item"><b>怎么让分身更像 ta？</b><div>在「创建」里上传尽量完整的聊天记录，并在人格设置里补充口头禅与说话风格，蒸馏后再手动微调。</div></div>
+          <div class="faq-item"><b>微信没有自动回复？</b><div>到「消息渠道」查看是否在线；掉线后重新扫码即可恢复。出站失败的消息会自动重试。</div></div>
+          <div class="faq-item"><b>积分和念念币有什么区别？</b><div>念念币是钱包货币，用兑换码充值；用念念币购买套餐后会得到积分，聊天按轮扣积分。</div></div>
+          <div class="faq-item"><b>忘了密码怎么办？</b><div>在登录页点「忘记密码？」，提交申请并留下联系方式，管理员核实后会帮你重置。</div></div>
+          <div class="faq-item"><b>需要更多帮助？</b><div>用「举报与反馈」提交问题，管理员会尽快处理。</div></div>
+        </div>
+        <div class="btnrow"><button class="btn primary" id="helpFeedback" style="flex:1">去反馈</button></div>`,
+        (body, mask) => {
+          body.querySelector("#helpFeedback").onclick = () => {
+            closeModal(mask);
+            if ($("reportRow")) $("reportRow").click();
+          };
+        });
+    };
+
+    $("reportRow").onclick = () => {
+      openModal("举报与反馈", `
+        <div class="sub">描述遇到的问题，管理员会尽快处理。</div>
+        <div class="field"><label>类型</label>
+          <select id="rCategory">
+            <option value="abuse">违法或滥用内容</option>
+            <option value="bug">功能异常</option>
+            <option value="privacy">隐私问题</option>
+            <option value="other">其他</option>
+          </select>
+        </div>
+        <div class="field"><label>详情</label><textarea id="rDetail" rows="4" placeholder="请描述具体情况"></textarea></div>
+        <div class="btnrow"><button class="btn primary" id="rSubmit" style="flex:1">提交</button></div>`,
+        (body, mask) => {
+          body.querySelector("#rSubmit").onclick = async () => {
+            const detail = body.querySelector("#rDetail").value.trim();
+            if (!detail) { toast("请填写详情"); return; }
+            try {
+              await api("/api/reports", {
+                method: "POST",
+                body: JSON.stringify({ category: body.querySelector("#rCategory").value, detail }),
+              });
+              closeModal(mask);
+              toast("已提交，感谢反馈");
+            } catch (error) { toast(error.message); }
+          };
+        });
+    };
+
+    mountTabbar("/app/settings");
+    load().catch((error) => toast(error.message));
+  </script>
+</body>
+</html>

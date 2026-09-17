@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>长期记忆 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+</head>
+<body>
+  <div class="topbar">
+    <a class="icon-btn" href="/app" aria-label="返回">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </a>
+    <b style="font-size:14px">长期记忆</b>
+    <div class="spacer"></div>
+    <button class="icon-btn" id="renameBtn" title="重命名联系人" aria-label="重命名联系人" style="display:none">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+    </button>
+  </div>
+
+  <div class="shell">
+    <div class="row block">
+      <h2 class="flex1" style="font-size:20px;font-weight:800">长期记忆</h2>
+      <span class="badge b-ok">按联系人隔离</span>
+    </div>
+
+    <div class="seg block" id="personaTabs" style="display:none"></div>
+
+    <div class="inp block">
+      <svg class="ic" style="width:16px;height:16px;color:#9a9cab" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input id="memSearch" placeholder="搜索记忆 / 联系人" />
+    </div>
+
+    <div class="seg block" id="contactTabs" style="display:none"></div>
+    <div class="mini" id="headSub" style="margin:2px 2px 12px">加载中…</div>
+    <div id="memoryList" class="stagger"></div>
+
+    <button class="btn ghost wide" id="clearBtn" style="display:none;margin-top:6px">清空该联系人记忆</button>
+    <div class="slogan">念念 · 想 ta 的时候，念念就好</div>
+  </div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    const KIND_LABEL = { fact: "事实 FACT", preference: "偏好 PREFERENCE", event: "事件 EVENT", relation: "关系 RELATION" };
+    const KIND_COLOR = { fact: "var(--v)", preference: "var(--pink)", event: "var(--blue)", relation: "var(--green)" };
+    let state = { personas: [], personaId: 0, data: null, contact: "", filter: "" };
+
+    function personaName(id) {
+      const p = state.personas.find((item) => item.id === id);
+      return p ? p.name : "Agent";
+    }
+    function contactLabel(contact) {
+      if (contact.display_name) return contact.display_name;
+      const key = contact.contact_key || "";
+      return key.length > 14 ? key.slice(0, 6) + "…" + key.slice(-4) : (key || "未知联系人");
+    }
+    function esc(text) { return escapeHtml(text || ""); }
+
+    function renderPersonaTabs() {
+      const tabs = $("personaTabs");
+      if (state.personas.length <= 1) { tabs.style.display = "none"; tabs.innerHTML = ""; return; }
+      tabs.style.display = "";
+      tabs.innerHTML = state.personas.map((p) =>
+        `<div class="${p.id === state.personaId ? "on" : ""}" data-pid="${p.id}">${esc(p.name)}</div>`
+      ).join("");
+      tabs.querySelectorAll("[data-pid]").forEach((btn) => {
+        btn.onclick = () => {
+          state.personaId = Number(btn.dataset.pid);
+          state.contact = "";
+          loadMemories().catch((error) => toast(error.message || String(error)));
+        };
+      });
+    }
+
+    function renderContacts() {
+      const host = $("contactTabs");
+      const contacts = state.data.contacts || [];
+      if (!contacts.length) { host.style.display = "none"; host.innerHTML = ""; return; }
+      host.style.display = "";
+      host.innerHTML = contacts.map((c) => {
+        const active = c.contact_key === state.contact ? "on" : "";
+        return `<div class="${active}" data-contact="${esc(c.contact_key)}">${esc(contactLabel(c))} · ${c.memory_count}</div>`;
+      }).join("");
+      host.querySelectorAll("[data-contact]").forEach((btn) => {
+        btn.onclick = () => { state.contact = btn.dataset.contact; loadMemories().catch((error) => toast(error.message || String(error))); };
+      });
+    }
+
+    function renderMemories() {
+      const host = $("memoryList");
+      const items = (state.data.memories || []).filter((m) =>
+        !state.filter || (m.content || "").toLowerCase().includes(state.filter));
+      const hasContact = Boolean(state.contact);
+      $("clearBtn").style.display = hasContact && (state.data.memories || []).length ? "" : "none";
+      $("renameBtn").style.display = hasContact ? "" : "none";
+      if (!state.data.enabled) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("brain")}</div><div class="t">长期记忆已关闭</div><div>在 Agent 的「大模型」设置里重新开启</div></section>`;
+        return;
+      }
+      if (!hasContact) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("brain")}</div><div class="t">还没有聊天对象</div><div>收到微信消息后，念念会开始为对方积累长期记忆</div></section>`;
+        return;
+      }
+      if (!items.length) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("brain")}</div><div class="t">${state.filter ? "没有匹配的记忆" : "还没有记忆"}</div><div>聊得多了，念念会自动记住重要的信息</div></section>`;
+        return;
+      }
+      host.innerHTML = items.map((m) => `<div class="mem" style="border-left-color:${KIND_COLOR[m.kind] || "var(--v)"}">
+        <div class="k" style="color:${KIND_COLOR[m.kind] || "var(--v)"}">${KIND_LABEL[m.kind] || "记忆"}</div>
+        <p>${esc(m.content)}</p>
+        <div class="mini" style="margin-top:5px">来自「${esc(personaName(state.personaId))}」· ${fmtDate(m.created_at)}</div>
+        <div class="btnrow" style="margin-top:9px;justify-content:flex-end">
+          <button class="btn small ghost" data-edit="${m.id}">记错了，改一下</button>
+        </div>
+      </div>`).join("");
+      host.querySelectorAll("[data-edit]").forEach((btn) => {
+        btn.onclick = () => editMemory(Number(btn.dataset.edit));
+      });
+    }
+
+    function editMemory(id) {
+      const item = (state.data.memories || []).find((m) => m.id === id);
+      if (!item) return;
+      const options = Object.keys(KIND_LABEL).map((kind) =>
+        `<option value="${kind}" ${kind === item.kind ? "selected" : ""}>${KIND_LABEL[kind]}</option>`
+      ).join("");
+      openModal("修正这条记忆", `
+        <div class="sub">念念会把修正后的内容当作真实信息来理解你。</div>
+        <div class="field"><label>内容</label><textarea id="memText" rows="4" maxlength="500">${esc(item.content)}</textarea></div>
+        <div class="field"><label>类型</label><select id="memKind">${options}</select></div>
+        <div class="btnrow"><button class="btn primary wide" id="memSave">保存修正</button></div>`,
+        (body, mask) => {
+          let busy = false;
+          body.querySelector("#memText").focus();
+          body.querySelector("#memSave").onclick = async () => {
+            if (busy) return;
+            const content = body.querySelector("#memText").value.trim();
+            if (!content) { toast("内容不能为空"); return; }
+            const button = body.querySelector("#memSave");
+            busy = true;
+            button.disabled = true;
+            try {
+              await api(`/api/personas/${state.personaId}/memories/${id}`, {
+                method: "PUT",
+                body: JSON.stringify({ content, kind: body.querySelector("#memKind").value }),
+              });
+              item.content = content;
+              item.kind = body.querySelector("#memKind").value;
+              closeModal(mask);
+              toast("已修正");
+              renderMemories();
+            } catch (error) { busy = false; button.disabled = false; toast(error.message || String(error)); }
+          };
+        });
+    }
+
+    async function loadMemories() {
+      const host = $("memoryList");
+      host.innerHTML = skeletonCards(3);
+      const query = state.contact ? "?contact=" + encodeURIComponent(state.contact) : "";
+      let data;
+      try {
+        data = await api(`/api/personas/${state.personaId}/memories${query}`);
+      } catch (error) {
+        host.innerHTML = `<section class="glass card empty-state"><div class="big">${icon("warning")}</div><div class="t">加载失败</div><div>${esc(error.message || "请稍后重试")}</div></section>`;
+        return;
+      }
+      state.data = data;
+      if (!state.contact && data.selected) state.contact = data.selected;
+      $("headSub").textContent = `${personaName(state.personaId)} · 共 ${data.total} 条长期记忆`;
+      renderPersonaTabs();
+      renderContacts();
+      renderMemories();
+    }
+
+    async function load() {
+      const data = await me();
+      state.personas = data.personas || [];
+      if (!state.personas.length) {
+        $("headSub").textContent = "还没有 Agent";
+        $("memoryList").innerHTML = `<section class="glass card empty-state"><div class="big">${icon("brain")}</div><div class="t">还没有 Agent</div><div>先创建一个 Agent，再让 ta 记住与你聊天的人</div></section>`;
+        return;
+      }
+      const active = state.personas.find((p) => p.is_active) || state.personas[0];
+      state.personaId = active.id;
+      await loadMemories();
+    }
+
+    $("memSearch").addEventListener("input", (event) => {
+      state.filter = event.target.value.trim().toLowerCase();
+      if (state.data) renderMemories();
+    });
+
+    $("clearBtn").onclick = () => {
+      const contact = (state.data.contacts || []).find((c) => c.contact_key === state.contact);
+      if (!confirm(`清空「${contact ? contactLabel(contact) : "该联系人"}」的全部长期记忆？`)) return;
+      api(`/api/personas/${state.personaId}/memories/clear`, {
+        method: "POST",
+        body: JSON.stringify({ contact: state.contact }),
+      }).then(() => { toast("已清空"); return loadMemories(); }).catch((e) => toast(e.message || String(e)));
+    };
+
+    $("renameBtn").onclick = () => {
+      const contact = (state.data.contacts || []).find((c) => c.contact_key === state.contact);
+      if (contact) {
+        openModal("重命名联系人", `
+          <div class="field"><label>备注名</label><input id="cName" value="${esc(contact.display_name || "")}" placeholder="例如：妈妈" /></div>
+          <div class="btnrow"><button class="btn primary wide" id="cSave">保存</button></div>`,
+          (body, mask) => {
+            body.querySelector("#cSave").onclick = async () => {
+              try {
+                await api(`/api/personas/${state.personaId}/contacts/${encodeURIComponent(state.contact)}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ name: body.querySelector("#cName").value.trim() }),
+                });
+                closeModal(mask);
+                toast("已保存");
+                await loadMemories();
+              } catch (error) { toast(error.message || String(error)); }
+            };
+          });
+      }
+    };
+
+    mountTabbar("/app/memory");
+    load().catch((error) => toast(error.message || String(error)));
+  </script>
+</body>
+</html>

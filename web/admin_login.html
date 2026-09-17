@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>管理后台登录 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="g pad auth-card reveal in">
+      <div style="text-align:center;margin:6px 0 20px">
+        <div class="brand-mark" style="margin:0 auto 14px">念</div>
+        <div class="eyebrow" style="font-size:11.5px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3)">Console</div>
+        <h1 style="font-size:21px;margin-top:6px">管理后台登录</h1>
+        <div class="sub">仅限管理员账号访问</div>
+      </div>
+
+      <div class="field">
+        <label>用户名</label>
+        <input id="username" autocomplete="username" placeholder="管理员用户名" />
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="password" type="password" autocomplete="current-password" placeholder="密码" />
+      </div>
+      <button class="btn primary wide" id="submit" style="margin-top:4px">登 录</button>
+
+      <div class="hint" id="msg" style="text-align:center;margin-top:12px;color:var(--red)"></div>
+      <p class="mini" style="text-align:center;line-height:1.7;margin-top:16px">
+        <a href="/">返回念念首页</a>
+      </p>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+  <script>
+    const submit = $("submit");
+    const msg = $("msg");
+
+    submit.onclick = async () => {
+      const username = $("username").value.trim();
+      const password = $("password").value;
+      if (!username || !password) { msg.textContent = "请填写用户名与密码"; return; }
+      submit.disabled = true;
+      try {
+        await api("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) });
+        const data = await me();
+        if (data.user && data.user.role === "admin") {
+          window.location.href = "/admin";
+        } else {
+          await api("/api/auth/logout", { method: "POST" }).catch(() => {});
+          msg.textContent = "该账号没有管理员权限";
+        }
+      } catch (error) {
+        msg.textContent = error.message;
+      } finally {
+        submit.disabled = false;
+      }
+    };
+
+    $("password").addEventListener("keydown", (event) => { if (event.key === "Enter") submit.click(); });
+    $("username").addEventListener("keydown", (event) => { if (event.key === "Enter") submit.click(); });
+    $("username").focus();
+  </script>
+</body>
+</html>

@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <meta name="robots" content="noindex,nofollow" />
+  <title>管理后台 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/admin.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+</head>
+<body>
+  <div class="admin-app">
+    <aside class="admin-side">
+      <div class="admin-brand">
+        <div class="mark">念</div>
+        <div class="word"><b>念念</b><small>Console</small></div>
+        <button class="side-close" id="sideClose" aria-label="关闭导航"></button>
+      </div>
+      <nav class="admin-nav" id="sideNav">
+        <div class="label">运营</div>
+        <button data-tab="overview" class="active"></button>
+        <button data-tab="reports"></button>
+        <button data-tab="users"></button>
+        <div class="label">配置</div>
+        <button data-tab="credits"></button>
+        <div class="label">运维</div>
+        <button data-tab="audit"></button>
+        <button data-tab="system"></button>
+      </nav>
+      <div class="side-foot">
+        <div class="side-user">
+          <div class="avatar" id="sideAvatar">A</div>
+          <div class="who"><b id="sideName">管理员</b><span id="sideRole">超级管理员</span></div>
+        </div>
+        <button class="btn small ghost wide" id="backAppBtn">返回应用</button>
+        <button class="btn small ghost wide" id="logoutBtn">退出登录</button>
+      </div>
+    </aside>
+
+    <main class="admin-main">
+      <div class="admin-head">
+        <header class="admin-top">
+          <button class="nav-toggle" id="navToggle" aria-label="打开导航"></button>
+          <div class="admin-title">
+            <h1 id="pageTitle">概览</h1>
+            <div class="sub"><span class="live-dot"></span><span id="adminLine">正在同步数据…</span></div>
+          </div>
+          <div class="actions">
+            <button class="btn small ghost" id="refreshBtn"></button>
+          </div>
+        </header>
+      </div>
+
+      <div class="admin-content">
+        <section class="panel on" id="panel-overview">
+          <div class="kpi-grid" id="kpiGrid">
+            <div class="kpi skeleton skel-kpi"></div><div class="kpi skeleton skel-kpi"></div>
+            <div class="kpi skeleton skel-kpi"></div><div class="kpi skeleton skel-kpi"></div>
+          </div>
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="growthHead"></div>
+              <div id="growthBody"><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="revenueHead"></div>
+              <div id="revenueBody"><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div></div>
+            </div>
+          </div>
+          <div class="grid-2 wide-left">
+            <div class="acard">
+              <div class="acard-head" id="usageHead"></div>
+              <div id="usageChart"><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div><div class="skeleton skel-row"></div></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="outboxHead"></div>
+              <div id="outboxChart"><div class="skeleton skel-row" style="height:170px"></div></div>
+            </div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="alertHead"></div>
+            <div id="alertList"></div>
+          </div>
+          <div class="acard" id="recoveryCard" style="display:none">
+            <div class="acard-head" id="recoveryHead"></div>
+            <div id="recoveryList"></div>
+          </div>
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="reportHead"></div>
+              <div id="reportChart"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="recentHead"></div>
+              <div id="recentAudit"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-reports">
+          <div class="acard">
+            <div class="toolbar">
+              <nav class="segment" id="reportFilter">
+                <button data-filter="all" class="active">全部</button>
+                <button data-filter="open">待处理</button>
+                <button data-filter="resolved">已处理</button>
+              </nav>
+            </div>
+            <div id="reportList"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-users">
+          <div class="acard">
+            <div class="toolbar">
+              <label class="search">
+                <span id="userSearchIcon"></span>
+                <input id="userSearch" placeholder="搜索用户名…" autocomplete="off" />
+              </label>
+              <span class="tag plain" id="userCount"></span>
+            </div>
+            <div class="tbl-wrap">
+              <table class="atable">
+                <thead><tr>
+                  <th>用户</th><th>角色</th><th>人格</th><th>积分</th><th>念念币</th><th>注册时间</th><th style="text-align:right">操作</th>
+                </tr></thead>
+                <tbody id="userList"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-credits">
+          <div class="grid-2 wide-left">
+            <div class="acard">
+              <div class="acard-head" id="platformHead"></div>
+              <div id="platformForm"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="creditTotalsHead"></div>
+              <div id="creditTotals"></div>
+            </div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="coinHead"></div>
+            <div id="coinOverview"></div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="codeHead"></div>
+            <div id="codeForm"></div>
+            <div id="codeList"></div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="packageHead"></div>
+            <div class="pkg-grid" id="packageList"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-audit">
+          <div class="acard">
+            <div class="toolbar">
+              <nav class="segment" id="auditFilter">
+                <button data-action="all" class="active">全部</button>
+                <button data-action="report.resolve">举报</button>
+                <button data-action="user.set_role">角色</button>
+                <button data-action="user.reset_password">密码</button>
+                <button data-action="user.grant_credits">积分</button>
+              </nav>
+              <label class="search" style="flex:1;min-width:180px">
+                <span id="auditSearchIcon"></span>
+                <input id="auditSearch" placeholder="搜索操作人 / 对象 / 详情…" autocomplete="off" />
+              </label>
+            </div>
+            <div id="auditList"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-system">
+          <div class="grid-3" id="healthGrid"></div>
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="counterHead"></div>
+              <div id="counterList"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="timingHead"></div>
+              <div id="timingList"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="nav-scrim" id="navScrim"></div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    const CATEGORY = { abuse: "违法或滥用", bug: "功能异常", privacy: "隐私问题", other: "其他" };
+    const ACTION_LABEL = {
+      "report.resolve": "处理举报", "user.set_role": "调整角色", "user.reset_password": "重置密码",
+      "platform.update": "更新平台模型", "user.grant_credits": "调整积分", "package.save": "保存套餐",
+      "user.grant_coins": "调整念念币", "redemption.create": "生成兑换码",
+      "coins.redeem": "兑换念念币", "package.purchase": "购买套餐",
+    };
+    const ACTION_ICON = {
+      "report.resolve": "warning", "user.set_role": "user", "user.reset_password": "key",
+      "platform.update": "cpu", "user.grant_credits": "store", "package.save": "download",
+      "user.grant_coins": "gift", "redemption.create": "key",
+      "coins.redeem": "gift", "package.purchase": "store",
+    };
+    const TABS = [
+      { key: "overview", label: "概览", icon: "spark", title: "运营概览" },
+      { key: "reports", label: "举报", icon: "warning", title: "举报处理" },
+      { key: "users", label: "用户", icon: "user", title: "用户管理" },
+      { key: "credits", label: "模型与计费", icon: "cpu", title: "模型与计费" },
+      { key: "audit", label: "审计", icon: "clock", title: "操作审计" },
+      { key: "system", label: "系统", icon: "sliders", title: "系统状态" },
+    ];
+    const TONE = {
+      v: { color: "#7c5cff", soft: "linear-gradient(135deg,rgba(124,92,255,.16),rgba(155,123,255,.10))" },
+      blue: { color: "#3d8bff", soft: "linear-gradient(135deg,rgba(61,139,255,.16),rgba(61,139,255,.08))" },
+      green: { color: "#1a9d54", soft: "linear-gradient(135deg,rgba(40,196,108,.18),rgba(40,196,108,.08))" },
+      orange: { color: "#b06b00", soft: "linear-gradient(135deg,rgba(255,159,46,.20),rgba(255,159,46,.08))" },
+      red: { color: "#c92a20", soft: "linear-gradient(135deg,rgba(255,69,58,.18),rgba(255,69,58,.08))" },
+      pink: { color: "#d6336c", soft: "linear-gradient(135deg,rgba(240,101,149,.18),rgba(240,101,149,.08))" },
+    };
+
+    const state = {
+      section: "overview", loading: false, pendingReload: false, online: false,
+      summary: null, users: [], reports: [], audit: [], metrics: null, health: null,
+      recovery: [],
+      platform: null, creditPackages: [], creditTotals: null, coinsTotals: null,
+      redemptionItems: [], redemptionStats: null, redemptionFilter: "",
+      reportFilter: "all", auditAction: "all", userQuery: "", auditQuery: "",
+    };
+
+    /* ------------------------------------------------------------ helpers */
+    function fmtTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      return isNaN(date) ? String(value) : date.toLocaleString("zh-CN", { hour12: false });
+    }
+    function fmtShort(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (isNaN(date)) return String(value);
+      const p = (n) => String(n).padStart(2, "0");
+      return `${date.getMonth() + 1}/${date.getDate()} ${p(date.getHours())}:${p(date.getMinutes())}`;
+    }
+    function fmtRelative(value) {
+      const date = new Date(value);
+      if (isNaN(date)) return "-";
+      const diff = Math.max(0, Date.now() - date.getTime());
+      const m = Math.floor(diff / 60000);
+      if (m < 1) return "刚刚";
+      if (m < 60) return m + " 分钟前";
+      const h = Math.floor(m / 60);
+      if (h < 24) return h + " 小时前";
+      return Math.floor(h / 24) + " 天前";
+    }
+    function fmtUptime(seconds) {
+      const s = Math.max(0, Math.floor(seconds || 0));
+      const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+      if (d) return `${d} 天 ${h} 小时`;
+      if (h) return `${h} 小时 ${m} 分`;
+      return `${m} 分 ${s % 60} 秒`;
+    }
+    function segmentOf() { return (location.hash || "#overview").slice(1) || "overview"; }
+    function emptyState(text, name) {
+      return `<div class="empty">${name ? icon(name) : ""}${escapeHtml(text)}</div>`;
+    }
+    function headIcon(name, title, extra) {
+      return `${icon(name)}<h2>${escapeHtml(title)}</h2>${extra || ""}`;
+    }
+    function validityOptions(selected) {
+      const value = Number(selected) || 30;
+      return [30, 90, 365].map((days) => `<option value="${days}"${days === value ? " selected" : ""}>${days} 天</option>`).join("");
+    }
+
+    /* ------------------------------------------------------------- charts */
+    function donutChart(segments, opts) {
+      opts = opts || {};
+      const size = opts.size || 176, thickness = opts.thickness || 18;
+      const r = (size - thickness) / 2, c = 2 * Math.PI * r;
+      const total = segments.reduce((sum, item) => sum + (Number(item.value) || 0), 0);
+      const live = segments.filter((item) => (Number(item.value) || 0) > 0);
+      const gap = live.length > 1 ? 3 : 0;
+      let offset = 0;
+      const arcs = live.map((item) => {
+        const value = Number(item.value) || 0;
+        const frac = total > 0 ? value / total : 0;
+        const len = Math.max(0.4, frac * c - gap);
+        const el = `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${item.color}" stroke-width="${thickness}"
+          stroke-dasharray="${len.toFixed(2)} ${(c - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}"
+          stroke-linecap="round" transform="rotate(-90 ${size / 2} ${size / 2})"/>`;
+        offset += frac * c;
+        return el;
+      }).join("");
+      const track = `<circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="rgba(120,120,150,.14)" stroke-width="${thickness}"/>`;
+      const centerValue = opts.centerValue != null ? opts.centerValue : total;
+      return `<div class="donut-wrap">
+        <div class="donut" style="width:${size}px;height:${size}px">
+          <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">${track}${arcs}</svg>
+          <div class="center"><b>${escapeHtml(String(centerValue))}</b><span>${escapeHtml(String(opts.centerLabel || ""))}</span></div>
+        </div>
+        <div class="legend">${segments.map((item) => `
+          <div class="legend-row">
+            <span class="dot" style="background:${item.color}"></span>
+            <span class="nm">${escapeHtml(item.label)}</span>
+            <span class="vl">${escapeHtml(String(item.value))}</span>
+            <span class="pc">${total ? Math.round(((Number(item.value) || 0) / total) * 100) : 0}%</span>
+          </div>`).join("")}</div>
+      </div>`;
+    }
+
+    function ringGauge(value, max, opts) {
+      opts = opts || {};
+      const size = opts.size || 112, stroke = opts.stroke || 10;
+      const r = (size - stroke) / 2, c = 2 * Math.PI * r;
+      const ratio = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+      const dash = c * ratio;
+      const color = opts.color || "#7c5cff";
+      return `<div class="gauge">
+        <div class="donut" style="width:${size}px;height:${size}px">
+          <svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+            <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="rgba(120,120,150,.14)" stroke-width="${stroke}"/>
+            <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="${stroke}" stroke-linecap="round"
+              stroke-dasharray="${dash.toFixed(2)} ${(c - dash).toFixed(2)}" transform="rotate(-90 ${size / 2} ${size / 2})"/>
+          </svg>
+          <div class="center"><b style="font-size:20px">${escapeHtml(String(opts.centerValue != null ? opts.centerValue : Math.round(ratio * 100) + "%"))}</b><span>${escapeHtml(String(opts.centerLabel || ""))}</span></div>
+        </div>
+        <div class="cap">${escapeHtml(opts.cap || "")}</div>
+      </div>`;
+    }
+
+    function hbarList(items, opts) {
+      opts = opts || {};
+      if (!items.length) return emptyState(opts.empty || "暂无数据", opts.emptyIcon);
+      const max = Math.max.apply(null, items.map((item) => item.value).concat([1]));
+      return `<div class="hbars">${items.map((item) => `
+        <div class="hbar ${item.tone || ""}">
+          <span class="nm" title="${escapeHtml(item.label)}">${escapeHtml(item.label)}</span>
+          <span class="track"><i style="width:${Math.max(2, Math.round((item.value / max) * 100))}%"></i></span>
+          <span class="vl">${escapeHtml(String(item.value))}</span>
+        </div>`).join("")}</div>`;
+    }
+
+    function kpiCard(config) {
+      const tone = TONE[config.tone] || TONE.v;
+      const ratio = config.ratio != null ? Math.min(100, Math.max(0, config.ratio)) : null;
+      return `<div class="kpi" style="--tone:${tone.color};--tone-soft:${tone.soft}">
+        <div class="top">
+          <div class="tile">${icon(config.icon)}</div>
+          ${config.badge ? `<span class="delta">${escapeHtml(config.badge)}</span>` : ""}
+        </div>
+        <div class="n" data-count="${Number(config.value) || 0}">0</div>
+        <div class="l">${escapeHtml(config.label)}</div>
+        ${ratio != null ? `<div class="track"><i style="width:${ratio}%"></i></div>` : ""}
+      </div>`;
+    }
+
+    /* ----------------------------------------------------------- sections */
+    function setSection(name) {
+      if (!TABS.some((tab) => tab.key === name)) name = "overview";
+      state.section = name;
+      const meta = TABS.find((tab) => tab.key === name);
+      document.querySelectorAll("#sideNav button").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
+      document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("on", panel.id === "panel-" + name));
+      $("pageTitle").textContent = meta.title;
+      closeNav();
+      revealInit();
+    }
+
+    /* ----------------------------------------------------------- overview */
+    function todayCalls() {
+      return (((state.summary || {}).platform_usage || {}).by_user || []).reduce((sum, item) => sum + (item.n || 0), 0);
+    }
+
+    function renderOverview() {
+      const summary = state.summary || {};
+      const outbox = (summary.outbox && summary.outbox.counts) || {};
+      const totals = state.creditTotals || {};
+      const openReports = summary.open_reports || 0;
+      const totalReports = summary.reports || 0;
+      const failed = outbox.failed || 0;
+      const pending = outbox.pending || 0;
+      const sent = outbox.sent || 0;
+
+      $("kpiGrid").innerHTML = [
+        { icon: "user", label: "用户总数", value: summary.users || 0, tone: "v" },
+        { icon: "brain", label: "人格总数", value: summary.personas || 0, tone: "pink" },
+        { icon: "warning", label: "待处理举报", value: openReports, tone: openReports ? "orange" : "green",
+          badge: totalReports ? "累计 " + totalReports : "", ratio: totalReports ? (openReports / totalReports) * 100 : 0 },
+        { icon: "cpu", label: "今日平台调用", value: todayCalls(), tone: "blue" },
+        { icon: "store", label: "用户持有积分", value: totals.held || 0, tone: "v" },
+        { icon: "heart", label: "累计消耗积分", value: totals.used || 0, tone: "pink" },
+        { icon: "send", label: "出站待发送", value: pending, tone: "blue" },
+        { icon: "bell", label: "出站失败", value: failed, tone: failed ? "red" : "green",
+          ratio: (pending + sent + failed) ? (failed / (pending + sent + failed)) * 100 : 0 },
+      ].map(kpiCard).join("");
+      animateCounts($("kpiGrid"));
+
+      const ins = summary.insights || {};
+      const iu = ins.users || {};
+      const ia = ins.active || {};
+      const ic = ins.content || {};
+      const ir = ins.revenue || {};
+      const insightRow = ([label, value]) =>
+        `<div class="insight-row"><span>${escapeHtml(label)}</span><b>${escapeHtml(String(value == null ? 0 : value))}</b></div>`;
+      $("growthHead").innerHTML = headIcon("user", "用户增长与活跃");
+      $("growthBody").innerHTML = [
+        ["近 7 日新增", iu.new_week], ["今日新增", iu.new_today], ["近 30 日新增", iu.new_month],
+        ["今日活跃", ia.today], ["近 7 日活跃", ia.week], ["近 7 日留存（活跃≥2 天）", ia.returning_week],
+      ].map(insightRow).join("");
+      $("revenueHead").innerHTML = headIcon("store", "内容与商业化");
+      $("revenueBody").innerHTML = [
+        ["人格总数", ic.personas], ["产生对话的人格", ic.personas_active],
+        ["消息总量", ic.turns_total], ["近 7 日消息", ic.turns_week], ["已绑定微信用户", ic.bound_users],
+        ["累计消耗念念币", ir.coins_spent], ["近 7 日消耗念念币", ir.coins_spent_week], ["已兑换套餐数", ir.packages_purchased],
+      ].map(insightRow).join("");
+
+      const alertKind = {
+        platform: "平台模型", platform_cap: "额度", llm: "模型调用", persona: "人格数据",
+        send_failed: "出站发送", crisis: "情感安全", report: "用户举报",
+      };
+      const alerts = summary.alerts || [];
+      $("alertHead").innerHTML = headIcon("warning", "运营告警",
+        alerts.length
+          ? '<span class="spacer"></span><button class="btn small ghost" id="alertRead">全部已读</button>'
+          : '<span class="spacer"></span><span class="tag plain">无未读</span>');
+      $("alertList").innerHTML = alerts.length
+        ? `<div class="feed">${alerts.map((item) => `
+            <div class="feed-item">
+              <div class="feed-dot" style="background:${TONE.orange.soft};color:${TONE.orange.color}">${icon("warning")}</div>
+              <div class="feed-body">
+                <div class="feed-title">${escapeHtml(alertKind[item.kind] || item.kind || "提醒")}</div>
+                <div class="feed-sub">${escapeHtml(item.message || "")}</div>
+                <div class="feed-time">${fmtTime(item.created_at)}</div>
+              </div>
+            </div>`).join("")}</div>`
+        : emptyState("暂无未读告警", "warning");
+      const alertRead = $("alertRead");
+      if (alertRead) alertRead.onclick = async () => {
+        try { await api("/api/admin/alerts/read", { method: "POST" }); toast("已标记为已读"); loadAll(); }
+        catch (error) { toast(error.message); }
+      };
+
+      const recovery = state.recovery || [];
+      $("recoveryCard").style.display = recovery.length ? "" : "none";
+      $("recoveryHead").innerHTML = headIcon("user", "找回密码申请", '<span class="spacer"></span><span class="tag plain">' + recovery.length + " 条待处理</span>");
+      $("recoveryList").innerHTML = recovery.length
+        ? `<div class="feed">${recovery.map((item) => `
+            <div class="feed-item">
+              <div class="feed-dot" style="background:${TONE.blue.soft};color:${TONE.blue.color}">${icon("user")}</div>
+              <div class="feed-body">
+                <div class="feed-title">${escapeHtml(item.username || "未知用户")}${item.contact ? " · " + escapeHtml(item.contact) : ""}</div>
+                <div class="feed-sub">${escapeHtml(item.note || "申请重置密码")}${item.user_status === "deleted" ? " · 账号已注销" : ""}</div>
+                <div class="feed-time">${fmtTime(item.created_at)}</div>
+              </div>
+              ${item.user_id && item.user_status !== "deleted"
+                ? `<button class="btn small ghost" data-pass="${escapeHtml(String(item.user_id))}" data-name="${escapeHtml(item.username || "")}">重置密码</button>` : ""}
+              <button class="btn small" data-recovery-done="${escapeHtml(String(item.id))}">已处理</button>
+            </div>`).join("")}</div>`
+        : "";
+
+      $("usageHead").innerHTML = headIcon("spark", "平台模型用量", '<span class="hint">今日 · 按用户</span>');
+      const usage = ((summary.platform_usage || {}).by_user || []);
+      const names = new Map(state.users.map((item) => [item.id, item.username]));
+      const usageItems = usage
+        .slice()
+        .sort((a, b) => (b.n || 0) - (a.n || 0))
+        .slice(0, 8)
+        .map((item) => ({ label: names.get(item.user_id) || "用户 #" + item.user_id, value: item.n || 0 }));
+      $("usageChart").innerHTML = hbarList(usageItems, { empty: "今日暂无平台模型调用", emptyIcon: "spark" });
+
+      $("outboxHead").innerHTML = headIcon("send", "出站队列", '<span class="spacer"></span><span class="tag plain">' + (pending + sent + failed) + " 条</span>");
+      $("outboxChart").innerHTML = donutChart([
+        { label: "待发送", value: pending, color: "#7c5cff" },
+        { label: "已发送", value: sent, color: "#28c46c" },
+        { label: "失败", value: failed, color: "#ff453a" },
+      ], { centerValue: pending + sent + failed, centerLabel: "总任务" });
+      const failures = (summary.outbox && summary.outbox.recent_failures) || [];
+      if (failures.length) {
+        $("outboxChart").insertAdjacentHTML("beforeend",
+          `<div class="feed" style="margin-top:14px">${failures.slice(0, 3).map((item) => `
+            <div class="feed-item">
+              <div class="feed-dot" style="background:${TONE.red.soft};color:${TONE.red.color}">${icon("warning")}</div>
+              <div class="feed-body">
+                <div class="feed-title">#${escapeHtml(String(item.id))} · 用户 ${escapeHtml(String(item.user_id))}</div>
+                <div class="feed-sub">${escapeHtml(item.last_error || "发送失败")}</div>
+                <div class="feed-time">重试 ${escapeHtml(String(item.attempts == null ? 0 : item.attempts))} 次 · ${fmtTime(item.updated_at)}</div>
+              </div>
+            </div>`).join("")}</div>`);
+      }
+
+      $("reportHead").innerHTML = headIcon("warning", "举报处理进度");
+      const resolved = Math.max(0, totalReports - openReports);
+      $("reportChart").innerHTML = `<div class="gauge-row">
+        ${ringGauge(resolved, totalReports || 1, { color: "#28c46c", cap: "已处理", centerLabel: "办结率", centerValue: (totalReports ? Math.round((resolved / totalReports) * 100) : 0) + "%" })}
+        ${ringGauge(openReports, totalReports || 1, { color: "#ff9f2e", cap: "待处理", centerLabel: "待办占比", centerValue: (totalReports ? Math.round((openReports / totalReports) * 100) : 0) + "%" })}
+      </div>`;
+
+      $("recentHead").innerHTML = headIcon("clock", "最近操作", '<span class="spacer"></span><button class="btn small ghost" data-tab="audit">全部</button>');
+      renderRecentAudit();
+    }
+
+    function renderRecentAudit() {
+      const items = state.audit.slice(0, 5);
+      $("recentAudit").innerHTML = items.length ? `<div class="feed">${items.map(auditItem).join("")}</div>`
+        : emptyState("暂无操作记录", "clock");
+    }
+
+    function auditItem(item) {
+      const tone = TONE.v;
+      return `<div class="feed-item">
+        <div class="feed-dot">${icon(ACTION_ICON[item.action] || "spark")}</div>
+        <div class="feed-body">
+          <div class="feed-title">${escapeHtml(ACTION_LABEL[item.action] || item.action || "操作")}</div>
+          <div class="feed-sub">${escapeHtml(item.actor || "cli")} → ${escapeHtml(item.target || "-")}${item.detail ? " · " + escapeHtml(item.detail) : ""}</div>
+          <div class="feed-time">${fmtTime(item.created_at)}</div>
+        </div>
+      </div>`;
+    }
+
+    /* ------------------------------------------------------------ reports */
+    function openCount() { return state.reports.filter((item) => item.status === "open").length; }
+    function renderReports() {
+      const items = state.reports.filter((item) => state.reportFilter === "all" || item.status === state.reportFilter);
+      if (!items.length) { $("reportList").innerHTML = emptyState("没有符合条件的举报", "check"); return; }
+      $("reportList").innerHTML = items.map((item) => `
+        <div class="report-card">
+          <div class="avatar">${escapeHtml((item.username || "?").slice(0, 1).toUpperCase())}</div>
+          <div class="body">
+            <div class="top">
+              <b>#${escapeHtml(String(item.id))} · ${escapeHtml(CATEGORY[item.category] || item.category || "其他")}</b>
+              <span class="tag ${item.status === "open" ? "open" : "resolved"}">${item.status === "open" ? "待处理" : "已处理"}</span>
+            </div>
+            <div class="detail">${escapeHtml(item.detail || "（无详情）")}</div>
+            <div class="meta"><span>${icon("user")} ${escapeHtml(item.username || "未知用户")}</span><span>${icon("clock")} ${fmtTime(item.created_at)}</span></div>
+          </div>
+          <div style="flex:none" class="report-acts">
+            ${item.status === "open"
+              ? `<button class="btn small" data-resolve="${escapeHtml(String(item.id))}">标记已处理</button>`
+              : '<span class="tag plain">已处理</span>'}
+          </div>
+        </div>`).join("");
+    }
+
+    /* -------------------------------------------------------------- users */
+    function renderUsers() {
+      const query = state.userQuery.trim().toLowerCase();
+      const items = state.users.filter((item) => !query || (item.username || "").toLowerCase().includes(query));
+      $("userCount").textContent = "共 " + state.users.length + " 人";
+      if (!items.length) { $("userList").innerHTML = `<tr><td colspan="7">${emptyState("没有匹配的用户", "user")}</td></tr>`; return; }
+      const meId = (window.__me && window.__me.id) || 0;
+      const maxCredits = Math.max.apply(null, state.users.map((item) => item.credits || 0).concat([1]));
+      const maxCoins = Math.max.apply(null, state.users.map((item) => item.coins || 0).concat([1]));
+      $("userList").innerHTML = items.map((item) => {
+        const credits = item.credits || 0;
+        const coins = item.coins || 0;
+        return `<tr>
+          <td data-label="用户"><div class="u"><div class="avatar">${escapeHtml((item.username || "?").slice(0, 1).toUpperCase())}</div>
+            <div><b>${escapeHtml(item.username || "未命名")}</b><span>#${escapeHtml(String(item.id))}${item.id === meId ? " · 当前账号" : ""}</span></div></div></td>
+          <td data-label="角色"><span class="tag ${item.role === "admin" ? "admin" : "plain"}">${item.role === "admin" ? "管理员" : "普通用户"}</span>${item.status === "disabled" ? ' <span class="tag plain">已停用</span>' : ""}</td>
+          <td data-label="人格" class="num">${escapeHtml(String(item.personas || 0))}</td>
+          <td data-label="积分"><div class="credits-cell">
+            <div class="track"><i style="width:${Math.max(2, Math.round((credits / maxCredits) * 100))}%"></i></div>
+            <b>${escapeHtml(String(credits))}</b></div></td>
+          <td data-label="念念币"><div class="credits-cell coins-cell">
+            <div class="track"><i style="width:${Math.max(2, Math.round((coins / maxCoins) * 100))}%"></i></div>
+            <b>${escapeHtml(String(coins))}</b></div></td>
+          <td data-label="注册" class="t3">${fmtShort(item.created_at)}</td>
+          <td data-label="操作"><div class="user-acts">
+            <button class="btn small ghost" data-grant="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">积分</button>
+            <button class="btn small ghost" data-coins="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">念念币</button>
+            <button class="btn small ghost" data-role="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.role || "user")}"${item.id === meId ? " disabled" : ""}>${item.role === "admin" ? "降为用户" : "设为管理员"}</button>
+            <button class="btn small" data-pass="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">重置密码</button>
+            <button class="btn small ${item.status === "disabled" ? "primary" : "ghost"}" data-status="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.status || "active")}" data-name="${escapeHtml(item.username || "")}"${item.id === meId ? " disabled" : ""}>${item.status === "disabled" ? "启用" : "停用"}</button>
+          </div></td>
+        </tr>`;
+      }).join("");
+    }
+
+    /* ------------------------------------------------------------- audit */
+    function renderAudit() {
+      const query = state.auditQuery.trim().toLowerCase();
+      const items = state.audit.filter((item) =>
+        (state.auditAction === "all" || item.action === state.auditAction) &&
+        (!query || [item.actor, item.target, item.detail, item.action].some((value) => String(value || "").toLowerCase().includes(query))));
+      if (!items.length) { $("auditList").innerHTML = emptyState("没有符合条件的记录", "clock"); return; }
+      $("auditList").innerHTML = `<div class="feed">${items.map(auditItem).join("")}</div>`;
+    }
+
+    /* ------------------------------------------------------------ credits */
+    function renderCreditsPanel() {
+      const platform = state.platform || {};
+      $("platformHead").innerHTML = headIcon("cpu", "平台模型", '<span class="spacer"></span>' +
+        `<span class="tag ${platform.enabled ? "resolved" : "plain"}">${platform.enabled ? "已启用" : "未启用"}</span>`);
+      $("platformForm").innerHTML = `
+        <div class="form-grid">
+          <div class="field"><label>Base URL</label><input id="pfBase" value="${escapeHtml(platform.base_url || "")}" /></div>
+          <div class="field"><label>模型名</label><input id="pfModel" value="${escapeHtml(platform.model || "")}" /></div>
+          <div class="field full"><label>API Key${platform.has_key ? "（已配置 " + escapeHtml(platform.api_key_masked || "") + "）" : ""}</label>
+            <input id="pfKey" type="password" autocomplete="off" placeholder="${platform.has_key ? "留空保持不变" : "填入平台 API Key"}" /></div>
+          <div class="field"><label>每轮扣积分</label><input id="pfCost" type="number" min="0" value="${escapeHtml(String(platform.per_turn_cost == null ? 0 : platform.per_turn_cost))}" /></div>
+          <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
+          <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
+          <div class="field"><label>蒸馏券单价(念念币)</label><input id="pfTicketPrice" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_price == null ? 60 : platform.distill_ticket_price))}" /></div>
+          <div class="field"><label>注册赠送蒸馏券</label><input id="pfTicketGift" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_gift == null ? 0 : platform.distill_ticket_gift))}" /></div>
+        </div>
+        <div class="toggle-row">
+          <div class="tt"><b>启用平台模型</b><span>关闭后未配置 Key 的用户将无法获得回复</span></div>
+          <label class="switch"><input type="checkbox" id="pfEnabled" ${platform.enabled ? "checked" : ""} /><span class="track"></span></label>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" id="pfSave">保存平台配置</button>
+          <span class="state-line">${platform.has_key ? icon("check", "ic chip-ok") + '<span class="chip-ok">密钥已就绪</span>' : icon("warning", "ic chip-off") + '<span class="chip-off">尚未配置密钥</span>'}</span>
+        </div>`;
+      $("pfSave").onclick = async () => {
+        const button = $("pfSave");
+        if (button.disabled) return;
+        button.disabled = true;
+        try {
+          const payload = {
+            base_url: $("pfBase").value.trim(), model: $("pfModel").value.trim(),
+            enabled: $("pfEnabled").checked,
+            per_turn_cost: Number($("pfCost").value) || 0,
+            new_user_gift: Number($("pfGift").value) || 0,
+            default_credit_days: Number($("pfDefaultDays").value) || 30,
+            distill_ticket_price: Number($("pfTicketPrice").value) || 0,
+            distill_ticket_gift: Number($("pfTicketGift").value) || 0,
+          };
+          const key = $("pfKey").value.trim();
+          if (key) payload.api_key = key;
+          state.platform = await api("/api/admin/platform", { method: "PUT", body: JSON.stringify(payload) });
+          toast("平台配置已保存");
+          renderCreditsPanel();
+          loadAll();
+        } catch (error) { button.disabled = false; toast(error.message); }
+      };
+
+      const totals = state.creditTotals || {};
+      const held = totals.held || 0, used = totals.used || 0, granted = totals.granted || 0;
+      const expired = totals.expired || 0;
+      $("creditTotalsHead").innerHTML = headIcon("store", "积分概览");
+      $("creditTotals").innerHTML = donutChart([
+        { label: "用户持有", value: held, color: "#7c5cff" },
+        { label: "累计消耗", value: used, color: "#f06595" },
+        { label: "已过期", value: expired, color: "#9aa0ad" },
+      ], { centerValue: granted, centerLabel: "累计发放", size: 168 }) +
+        `<div class="divider-soft"></div>
+        <div class="gauge-row">
+          ${ringGauge(used, granted || 1, { color: "#f06595", size: 96, cap: "消耗率", centerValue: (granted ? Math.round((used / granted) * 100) : 0) + "%", centerLabel: "已消耗" })}
+          ${ringGauge(held, granted || 1, { color: "#7c5cff", size: 96, cap: "存量率", centerValue: (granted ? Math.round((held / granted) * 100) : 0) + "%", centerLabel: "未使用" })}
+        </div>
+        <div class="mini" style="margin-top:10px">累计到期清零 ${escapeHtml(String(expired))} 积分</div>`;
+
+      const coinTotals = state.coinsTotals || {};
+      const coinHeld = coinTotals.held || 0, coinSpent = coinTotals.spent || 0, coinGranted = coinTotals.granted || 0;
+      $("coinHead").innerHTML = headIcon("gift", "念念币概览");
+      $("coinOverview").innerHTML = donutChart([
+        { label: "用户持有", value: coinHeld, color: "#ff9f2e" },
+        { label: "已消耗", value: coinSpent, color: "#f06595" },
+      ], { centerValue: coinGranted, centerLabel: "累计发放", size: 168 }) +
+        `<div class="divider-soft"></div>
+        <div class="gauge-row">
+          ${ringGauge(coinSpent, coinGranted || 1, { color: "#f06595", size: 96, cap: "消耗率", centerValue: (coinGranted ? Math.round((coinSpent / coinGranted) * 100) : 0) + "%", centerLabel: "已消耗" })}
+          ${ringGauge(coinHeld, coinGranted || 1, { color: "#ff9f2e", size: 96, cap: "存量率", centerValue: (coinGranted ? Math.round((coinHeld / coinGranted) * 100) : 0) + "%", centerLabel: "未使用" })}
+        </div>`;
+
+      renderRedemptionPanel();
+
+      $("packageHead").innerHTML = headIcon("download", "积分套餐", '<span class="spacer"></span><button class="btn small" id="addPackage">新增套餐</button>');
+      const packs = state.creditPackages || [];
+      $("packageList").innerHTML = packs.length ? packs.map((item) => `
+        <div class="pkg ${item.active ? "active" : ""}">
+          ${item.badge ? `<span class="badge">${escapeHtml(item.badge)}</span>` : ""}
+          <div class="field" style="margin-bottom:8px"><label>名称</label><input data-pkg-name="${item.id}" value="${escapeHtml(item.name)}" /></div>
+          <div class="pk-credits">${escapeHtml(String(item.credits))} <span style="font-size:13px;font-weight:700;color:var(--text-3)">积分</span></div>
+          <div class="form-grid" style="margin-top:10px">
+            <div class="field"><label>定价(念念币)</label><input data-pkg-coins="${item.id}" type="number" min="0" value="${escapeHtml(String(item.coins == null ? 0 : item.coins))}" /></div>
+            <div class="field"><label>有效期</label><select data-pkg-days="${item.id}">${validityOptions(item.validity_days)}</select></div>
+          </div>
+          <div class="form-grid" style="margin-top:0">
+            <div class="field"><label>积分</label><input data-pkg-credits="${item.id}" type="number" min="1" value="${item.credits}" /></div>
+            <div class="field"><label>徽标</label><input data-pkg-badge="${item.id}" value="${escapeHtml(item.badge || "")}" placeholder="可选" /></div>
+          </div>
+          <div class="pk-actions">
+            <label class="switch" title="启用"><input type="checkbox" data-pkg-active="${item.id}" ${item.active ? "checked" : ""} /><span class="track"></span></label>
+            <button class="btn small primary" style="margin-left:auto" data-pkg-save="${item.id}">保存</button>
+          </div>
+        </div>`).join("") : emptyState("暂无套餐", "download");
+      $("addPackage").onclick = openAddPackage;
+    }
+
+    function renderRedemptionPanel() {
+      const stats = state.redemptionStats || {};
+      $("codeHead").innerHTML = headIcon("key", "兑换码",
+        '<span class="spacer"></span><span class="tag plain">未使用 ' + escapeHtml(String(stats.unused || 0)) +
+        ' · 已使用 ' + escapeHtml(String(stats.used || 0)) + "</span>");
+      $("codeForm").innerHTML = `
+        <div class="form-grid">
+          <div class="field"><label>生成数量</label><input id="rcCount" type="number" min="1" max="200" value="10" /></div>
+          <div class="field"><label>每码念念币</label><input id="rcCoins" type="number" min="1" value="100" /></div>
+          <div class="field full"><label>批次备注（可选）</label><input id="rcBatch" placeholder="例如：9 月活动" /></div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" id="rcCreate">生成兑换码</button>
+          <span class="state-line">兑换码是念念币的唯一发放来源</span>
+        </div>`;
+      const items = state.redemptionItems || [];
+      $("codeList").innerHTML = items.length ? `<div class="divider-soft"></div>
+        <div class="tbl-wrap" style="margin-top:6px"><table class="atable compact">
+        <thead><tr><th>兑换码</th><th>念念币</th><th>状态</th><th>兑换用户</th><th>时间</th></tr></thead>
+        <tbody>${items.map((item) => `
+          <tr>
+            <td data-label="兑换码"><code class="code-cell" data-copy="${escapeHtml(item.code)}">${escapeHtml(item.code)}</code></td>
+            <td data-label="念念币" class="num">${escapeHtml(String(item.coins))}</td>
+            <td data-label="状态"><span class="tag ${item.status === "used" ? "plain" : "resolved"}">${item.status === "used" ? "已使用" : "未使用"}</span></td>
+            <td data-label="兑换用户" class="t3">${escapeHtml(item.redeemed_username || "-")}</td>
+            <td data-label="时间" class="t3">${item.status === "used" ? fmtShort(item.redeemed_at) : fmtShort(item.created_at)}</td>
+          </tr>`).join("")}</tbody></table></div>` : "";
+      $("rcCreate").onclick = async () => {
+        const button = $("rcCreate");
+        if (button.disabled) return;
+        const count = Number($("rcCount").value) || 0;
+        const coins = Number($("rcCoins").value) || 0;
+        if (count <= 0 || coins <= 0) { toast("数量与念念币需大于 0"); return; }
+        button.disabled = true;
+        try {
+          const result = await api("/api/admin/redemption-codes", {
+            method: "POST",
+            body: JSON.stringify({ count, coins, batch: $("rcBatch").value.trim() }),
+          });
+          toast("已生成 " + (result.items || []).length + " 个兑换码");
+          await loadAll();
+          setSection("credits");
+        } catch (error) { button.disabled = false; toast(error.message); }
+      };
+      $("codeList").querySelectorAll("[data-copy]").forEach((node) => {
+        node.onclick = async () => {
+          try { await navigator.clipboard.writeText(node.dataset.copy); toast("已复制"); }
+          catch (error) { toast("复制失败"); }
+        };
+      });
+    }
+
+    async function savePackage(packageId) {
+      const name = document.querySelector(`[data-pkg-name="${packageId}"]`).value.trim();
+      const credits = Number(document.querySelector(`[data-pkg-credits="${packageId}"]`).value) || 0;
+      const coins = Number(document.querySelector(`[data-pkg-coins="${packageId}"]`).value) || 0;
+      const badge = document.querySelector(`[data-pkg-badge="${packageId}"]`).value.trim();
+      const active = document.querySelector(`[data-pkg-active="${packageId}"]`).checked;
+      const validity_days = Number(document.querySelector(`[data-pkg-days="${packageId}"]`).value) || 30;
+      try {
+        await api("/api/admin/packages", { method: "POST", body: JSON.stringify({ id: packageId, name, credits, coins, badge, sort: packageId, active, validity_days }) });
+        toast("套餐已保存");
+        await loadAll();
+      } catch (error) { toast(error.message); }
+    }
+
+    function openAddPackage() {
+      openModal("新增套餐", `
+        <div class="field"><label>名称</label><input id="npkgName" placeholder="例如：豪华包" /></div>
+        <div class="split">
+          <div class="field"><label>积分</label><input id="npkgCredits" type="number" min="1" value="2000" /></div>
+          <div class="field"><label>定价(念念币)</label><input id="npkgCoins" type="number" min="0" value="180" /></div>
+        </div>
+        <div class="field"><label>有效期</label><select id="npkgDays">${validityOptions(90)}</select></div>
+        <div class="field"><label>徽标</label><input id="npkgBadge" placeholder="可选" /></div>
+        <div class="btnrow"><button class="btn primary" id="npkgOk" style="flex:1">创建</button></div>`, (body, mask) => {
+        body.querySelector("#npkgOk").onclick = async () => {
+          try {
+            await api("/api/admin/packages", {
+              method: "POST",
+              body: JSON.stringify({
+                name: body.querySelector("#npkgName").value.trim(),
+                credits: Number(body.querySelector("#npkgCredits").value) || 0,
+                coins: Number(body.querySelector("#npkgCoins").value) || 0,
+                badge: body.querySelector("#npkgBadge").value.trim(),
+                validity_days: Number(body.querySelector("#npkgDays").value) || 30,
+                sort: 99, active: true,
+              }),
+            });
+            closeModal(mask); toast("套餐已创建"); await loadAll();
+          } catch (error) { toast(error.message); }
+        };
+      });
+    }
+
+    /* ------------------------------------------------------------- system */
+    function renderSystem() {
+      const metrics = state.metrics || {};
+      const health = state.health || {};
+      const outbox = (metrics.outbox && metrics.outbox.counts) || {};
+      const ok = health.status === "ok";
+      const failed = outbox.failed || 0;
+      $("healthGrid").innerHTML = [
+        { icon: "watch", label: "服务状态", value: ok ? "运行中" : "异常", tone: ok ? "green" : "red", display: ok ? "运行中" : "异常" },
+        { icon: "clock", label: "运行时长", value: fmtUptime(metrics.uptime_seconds), tone: "v", display: fmtUptime(metrics.uptime_seconds) },
+        { icon: "user", label: "平台用户", value: health.users || 0, tone: "blue" },
+        { icon: "bell", label: "出站失败", value: failed, tone: failed ? "red" : "green" },
+      ].map((item) => {
+        const tone = TONE[item.tone] || TONE.v;
+        const text = item.display != null ? item.display : item.value;
+        return `<div class="acard" style="display:flex;align-items:center;gap:14px;padding:18px 20px">
+          <div class="kpi" style="padding:0;border:0;box-shadow:none;background:transparent">
+            <div class="tile" style="--tone:${tone.color};--tone-soft:${tone.soft}">${icon(item.icon)}</div>
+          </div>
+          <div><div style="font-size:22px;font-weight:800;letter-spacing:-0.03em">${escapeHtml(String(text))}</div>
+            <div class="mini" style="margin-top:3px">${escapeHtml(item.label)}</div></div>
+        </div>`;
+      }).join("");
+
+      $("counterHead").innerHTML = headIcon("sliders", "事件计数器");
+      const counters = Object.entries(metrics.counters || {}).sort((a, b) => b[1] - a[1]).slice(0, 10);
+      $("counterList").innerHTML = hbarList(
+        counters.map(([key, value]) => ({ label: key, value, tone: /error|fail|insufficient|blocked/i.test(key) ? "err" : "" })),
+        { empty: "暂无计数", emptyIcon: "sliders" });
+
+      $("timingHead").innerHTML = headIcon("clock", "耗时统计", '<span class="hint">毫秒</span>');
+      const timings = Object.entries(metrics.timings || {});
+      $("timingList").innerHTML = timings.length ? `<div class="feed">${timings.map(([key, value]) => `
+        <div class="feed-item">
+          <div class="feed-dot">${icon("clock")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(key)}</div>
+            <div class="feed-sub">平均 ${escapeHtml(String(value.avg_ms))} ms · 峰值 ${escapeHtml(String(value.max_ms))} ms</div>
+            <div class="feed-time">${value.count != null ? "调用 " + escapeHtml(String(value.count)) + " 次" : ""}</div>
+          </div>
+        </div>`).join("")}</div>` : emptyState("暂无数据", "clock");
+    }
+
+    /* --------------------------------------------------------------- load */
+    async function loadAll() {
+      if (state.loading) { state.pendingReload = true; return; }
+      state.loading = true;
+      state.pendingReload = false;
+      $("refreshBtn").disabled = true;
+      try {
+        const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery] = await Promise.all([
+          api("/api/admin/summary"), api("/api/admin/users"), api("/api/admin/reports"),
+          api("/api/admin/audit"), api("/api/metrics"), api("/health"),
+          api("/api/admin/platform"), api("/api/admin/credits"),
+          api("/api/admin/redemption-codes?limit=200"), api("/api/admin/recovery"),
+        ]);
+        state.summary = summary; state.users = users.items || []; state.reports = reports.items || [];
+        state.audit = audit.items || []; state.metrics = metrics; state.health = health;
+        state.platform = platform; state.creditTotals = credits.totals;
+        state.coinsTotals = credits.coins_totals; state.redemptionStats = credits.redemption;
+        state.creditPackages = credits.packages || [];
+        state.redemptionItems = codes.items || []; state.redemptionStats = codes.stats || state.redemptionStats;
+        state.recovery = recovery.items || [];
+        state.online = true;
+        renderOverview(); renderReports(); renderUsers(); renderAudit(); renderSystem(); renderCreditsPanel();
+        renderNavBadges();
+        const name = (window.__me && window.__me.username) || "管理员";
+        $("adminLine").textContent = `${name} · 数据同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })} · 服务运行 ${fmtUptime(metrics.uptime_seconds)}`;
+      } catch (error) {
+        state.online = false;
+        $("adminLine").textContent = error.message;
+        toast(error.message);
+        if (String(error.message).includes("管理员")) setTimeout(() => { window.location.href = "/app"; }, 900);
+      } finally {
+        state.loading = false;
+        $("refreshBtn").disabled = false;
+        if (state.pendingReload) loadAll();
+      }
+    }
+
+    function renderNavBadges() {
+      const open = openCount();
+      const btn = document.querySelector('#sideNav button[data-tab="reports"]');
+      if (!btn) return;
+      let pill = btn.querySelector(".pill-n");
+      if (open > 0) {
+        if (!pill) { pill = document.createElement("span"); pill.className = "pill-n"; btn.appendChild(pill); }
+        pill.textContent = open;
+      } else if (pill) { pill.remove(); }
+    }
+
+    /* ---------------------------------------------------------- navigation */
+    function openNav() { document.body.classList.add("nav-open"); }
+    function closeNav() { document.body.classList.remove("nav-open"); }
+
+    function mountNav() {
+      $("sideNav").querySelectorAll("button").forEach((btn) => {
+        const meta = TABS.find((tab) => tab.key === btn.dataset.tab);
+        btn.innerHTML = icon(meta.icon) + "<span>" + meta.label + "</span>";
+      });
+      $("navToggle").innerHTML = icon("menu");
+      $("sideClose").innerHTML = icon("close");
+      $("refreshBtn").innerHTML = icon("refresh") + "<span>刷新</span>";
+      $("userSearchIcon").innerHTML = icon("search");
+      $("auditSearchIcon").innerHTML = icon("search");
+    }
+
+    document.addEventListener("click", async (event) => {
+      const tabButton = event.target.closest("[data-tab]");
+      if (tabButton) {
+        const name = tabButton.dataset.tab;
+        if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
+        setSection(name);
+        return;
+      }
+      const filterButton = event.target.closest("#reportFilter button");
+      if (filterButton) {
+        state.reportFilter = filterButton.dataset.filter;
+        document.querySelectorAll("#reportFilter button").forEach((btn) => btn.classList.toggle("active", btn === filterButton));
+        refreshSegment($("reportFilter"));
+        renderReports();
+        return;
+      }
+      const actionButton = event.target.closest("#auditFilter button");
+      if (actionButton) {
+        state.auditAction = actionButton.dataset.action;
+        document.querySelectorAll("#auditFilter button").forEach((btn) => btn.classList.toggle("active", btn === actionButton));
+        refreshSegment($("auditFilter"));
+        renderAudit();
+        return;
+      }
+      const resolveButton = event.target.closest("[data-resolve]");
+      if (resolveButton) {
+        const id = resolveButton.dataset.resolve;
+        openModal("处理举报", `<div class="sub">确认将举报 #${escapeHtml(id)} 标记为已处理？</div>
+          <div class="btnrow"><button class="btn primary" id="resolveOk" style="flex:1">确认处理</button></div>`, (body, mask) => {
+          body.querySelector("#resolveOk").onclick = async () => {
+            try { await api(`/api/admin/reports/${id}/resolve`, { method: "POST" }); closeModal(mask); toast("已处理"); await loadAll(); }
+            catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const roleButton = event.target.closest("[data-role]");
+      if (roleButton) {
+        const next = roleButton.dataset.current === "admin" ? "user" : "admin";
+        const label = next === "admin" ? "设为管理员" : "降为普通用户";
+        openModal(label, `<div class="sub">确认将用户 #${escapeHtml(roleButton.dataset.role)} ${label}？</div>
+          <div class="btnrow"><button class="btn primary" id="roleOk" style="flex:1">确认</button></div>`, (body, mask) => {
+          body.querySelector("#roleOk").onclick = async () => {
+            try { await api(`/api/admin/users/${roleButton.dataset.role}/role`, { method: "POST", body: JSON.stringify({ role: next }) }); closeModal(mask); toast("角色已更新"); await loadAll(); }
+            catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const recoveryDone = event.target.closest("[data-recovery-done]");
+      if (recoveryDone) {
+        recoveryDone.disabled = true;
+        try {
+          await api(`/api/admin/recovery/${recoveryDone.dataset.recoveryDone}/resolve`, { method: "POST" });
+          toast("已标记处理完成");
+          await loadAll();
+        } catch (error) { toast(error.message); recoveryDone.disabled = false; }
+        return;
+      }
+      const passButton = event.target.closest("[data-pass]");
+      if (passButton) {
+        const name = passButton.dataset.name || ("用户 #" + passButton.dataset.pass);
+        openModal("重置密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（至少 8 位），该用户所有登录会立即失效。</div>
+          <div class="field"><label>新密码</label><input id="np" type="password" autocomplete="new-password" /></div>
+          <div class="btnrow"><button class="btn primary" id="npOk" style="flex:1">确认重置</button></div>`, (body, mask) => {
+          const submit = async () => {
+            if (submit.busy) return;
+            const value = body.querySelector("#np").value;
+            if (!value || value.length < 8) { toast("密码至少 8 位"); return; }
+            submit.busy = true;
+            try { await api(`/api/admin/users/${passButton.dataset.pass}/password`, { method: "POST", body: JSON.stringify({ password: value }) }); closeModal(mask); toast("密码已重置，该用户会话已失效"); await loadAll(); }
+            catch (error) { submit.busy = false; toast(error.message); }
+          };
+          body.querySelector("#npOk").onclick = submit;
+          body.querySelector("#np").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+        });
+        return;
+      }
+      const packageSave = event.target.closest("[data-pkg-save]");
+      if (packageSave) { savePackage(packageSave.dataset.pkgSave); return; }
+      const grantButton = event.target.closest("[data-grant]");
+      if (grantButton) {
+        const name = grantButton.dataset.name || ("用户 #" + grantButton.dataset.grant);
+        openModal("调整积分", `<div class="sub">为用户 <b>${escapeHtml(name)}</b> 发放或扣减积分（负数为扣减）。</div>
+          <div class="field"><label>积分变动</label><input id="cgDelta" type="number" value="100" /></div>
+          <div class="field"><label>有效期（发放时生效）</label><select id="cgDays">${validityOptions((state.platform || {}).default_credit_days)}</select></div>
+          <div class="field"><label>备注</label><input id="cgReason" placeholder="例如：补偿额度" /></div>
+          <div class="btnrow"><button class="btn primary" id="cgOk" style="flex:1">确认</button></div>`, (body, mask) => {
+          const idem = crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2);
+          body.querySelector("#cgOk").onclick = async () => {
+            const delta = Number(body.querySelector("#cgDelta").value) || 0;
+            if (!delta) { toast("变动值不能为 0"); return; }
+            try {
+              await api(`/api/admin/users/${grantButton.dataset.grant}/credits`, { method: "POST", headers: { "Idempotency-Key": idem }, body: JSON.stringify({ delta, credit_days: Number(body.querySelector("#cgDays").value) || 30, reason: body.querySelector("#cgReason").value.trim() }) });
+              closeModal(mask); toast("积分已更新"); await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const coinButton = event.target.closest("[data-coins]");
+      if (coinButton) {
+        const name = coinButton.dataset.name || ("用户 #" + coinButton.dataset.coins);
+        openModal("调整念念币", `<div class="sub">为用户 <b>${escapeHtml(name)}</b> 发放或扣减念念币（负数为扣减）。</div>
+          <div class="field"><label>念念币变动</label><input id="ccDelta" type="number" value="100" /></div>
+          <div class="field"><label>备注</label><input id="ccReason" placeholder="例如：客服补偿" /></div>
+          <div class="btnrow"><button class="btn primary" id="ccOk" style="flex:1">确认</button></div>`, (body, mask) => {
+          const idem = crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2);
+          body.querySelector("#ccOk").onclick = async () => {
+            const delta = Number(body.querySelector("#ccDelta").value) || 0;
+            if (!delta) { toast("变动值不能为 0"); return; }
+            try {
+              await api(`/api/admin/users/${coinButton.dataset.coins}/coins`, { method: "POST", headers: { "Idempotency-Key": idem }, body: JSON.stringify({ delta, reason: body.querySelector("#ccReason").value.trim() }) });
+              closeModal(mask); toast("念念币已更新"); await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const statusButton = event.target.closest("[data-status]");
+      if (statusButton) {
+        const enable = statusButton.dataset.current === "disabled";
+        const next = enable ? "active" : "disabled";
+        const name = statusButton.dataset.name || ("用户 #" + statusButton.dataset.status);
+        statusButton.disabled = true;
+        try {
+          await api(`/api/admin/users/${statusButton.dataset.status}/status`, { method: "POST", body: JSON.stringify({ status: next }) });
+          toast(enable ? "已启用该账号" : "已停用该账号");
+          await loadAll();
+        } catch (error) { toast(error.message); statusButton.disabled = false; }
+        return;
+      }
+    });
+
+    $("userSearch").addEventListener("input", (event) => { state.userQuery = event.target.value; renderUsers(); });
+    $("auditSearch").addEventListener("input", (event) => { state.auditQuery = event.target.value; renderAudit(); });
+    $("navToggle").onclick = openNav;
+    $("sideClose").onclick = closeNav;
+    $("navScrim").onclick = closeNav;
+    $("refreshBtn").onclick = () => loadAll();
+    $("backAppBtn").onclick = () => { window.location.href = "/app"; };
+    $("logoutBtn").onclick = async () => {
+      try { await api("/api/auth/logout", { method: "POST" }); } catch (error) { /* 忽略 */ }
+      window.location.href = "/login";
+    };
+
+    window.addEventListener("hashchange", () => setSection(segmentOf()));
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeNav(); });
+    setInterval(() => { if (!document.hidden && !state.loading) loadAll(); }, 60000);
+
+    (async () => {
+      mountNav();
+      setSection(segmentOf());
+      initSegments();
+      try {
+        const data = await me();
+        window.__me = data.user;
+        $("sideName").textContent = data.user.username || "管理员";
+        $("sideAvatar").textContent = (data.user.username || "A").slice(0, 1).toUpperCase();
+      } catch (error) { return; }
+      await loadAll();
+    })();
+  </script>
+</body>
+</html>

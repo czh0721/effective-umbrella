@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/raw/*
+!data/raw/.gitkeep
+data/profile/
+data/users/
+data/platform.db
+data/platform.db-*
+data/.secret_key
+data/deleted/

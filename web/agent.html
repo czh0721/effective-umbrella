@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#eceef5" />
+  <title>Agent 工作台 — 念念</title>
+  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/icon.svg" />
+  <link rel="apple-touch-icon" href="/static/icon.svg" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+</head>
+<body>
+  <div class="topbar">
+    <a class="icon-btn" href="/app" aria-label="返回">
+      <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>
+    </a>
+    <b id="agentName" style="font-size:14px">加载中…</b>
+    <div class="spacer"></div>
+    <button class="btn small primary" id="activateBtn" style="display:none">设为当前</button>
+  </div>
+  <div class="shell stagger" id="workbench"></div>
+  <div class="toasts"></div>
+  <script src="/static/app.js"></script>
+  <script>
+    const personaId = Number(location.pathname.split("/").pop());
+    let detail = null;
+    let trainFiles = [];
+    let debugContactNames = {};
+    let debugHistory = [];
+    let lastDebug = null;
+    let debugBusy = false;
+
+    function toastErr(error) {
+      const message = error.message || String(error);
+      toast(message);
+      if ((error.status || 0) === 402 || /蒸馏券/.test(message)) {
+        openModal(
+          "蒸馏券不足",
+          `<div class="mini" style="margin-bottom:12px">${escapeHtml(message || "每次蒸馏需要 1 张蒸馏券。")}</div>
+           <button class="btn primary wide" id="goTickets">前往购买</button>`,
+        );
+        $("goTickets").onclick = () => { window.location.href = "/app/settings"; };
+      }
+    }
+    function initials(name) { return escapeHtml((name || "?").slice(0, 1)); }
+    function contactLabel(contact) {
+      if (contact.display_name) return contact.display_name;
+      const key = contact.contact_key || "";
+      return key.length > 14 ? key.slice(0, 6) + "…" + key.slice(-4) : (key || "未知联系人");
+    }
+    function gradientFor(id) {
+      const palettes = [
+        "linear-gradient(145deg,#f472b6,#ec4899)",
+        "linear-gradient(145deg,#a78bfa,#7c5cff)",
+        "linear-gradient(145deg,#7c5cff,#9b7bff)",
+        "linear-gradient(145deg,#38bdf8,#3d8bff)",
+        "linear-gradient(145deg,#34d399,#28c46c)",
+      ];
+      return palettes[Number(id || 0) % palettes.length];
+    }
+
+    /* ------------------------------------------------------------- 通用 -- */
+    function kv(label, value) {
+      return `<div class="kv"><span class="k">${escapeHtml(label)}</span><span class="v">${escapeHtml(value || "未填写")}</span></div>`;
+    }
+    function listBlock(label, items) {
+      const list = (items || []).filter(Boolean);
+      return `<div class="field"><label>${escapeHtml(label)}</label><div class="chip-list">${
+        list.length ? list.map((item) => `<span class="tag-chip">${escapeHtml(item)}</span>`).join("") : '<span class="hint">暂无</span>'
+      }</div></div>`;
+    }
+    function row(act, iconName, title, sub, color) {
+      return `<div class="g-row click" data-act="${act}">
+        <span class="li-ico"${color ? ` style="color:${color}"` : ""}>${icon(iconName)}</span>
+        <div class="g-text"><div class="g-title">${escapeHtml(title)}</div>${sub ? `<div class="g-sub">${escapeHtml(sub)}</div>` : ""}</div>
+        <div class="spacer"></div><span class="chevron">›</span>
+      </div>`;
+    }
+    function bindActions(root) {
+      root.querySelectorAll("[data-act]").forEach((node) => {
+        node.onclick = () => { const fn = ACTIONS[node.dataset.act]; if (fn) fn(); };
+      });
+    }
+
+    /* ------------------------------------------------------- 工作台 -- */
+    function renderSettings() {
+      const s = detail.settings;
+      const wx = detail.channel.wechat || {};
+      const cardData = detail.card || {};
+      const soul = cardData.soul || {};
+      const running = Boolean(wx.running);
+      const status = running ? "微信在线 · 自动回复中" : wx.bound ? "微信已绑定 · 未在线" : "微信未绑定";
+      const styleTags = (soul.speaking_style || cardData.speaking_style || []).slice(0, 5);
+      const catchphrases = (soul.catchphrases || cardData.favorite_phrases || []).slice(0, 3);
+      const memCount = (cardData.memories || []).length;
+      const proactive = s.proactive || {};
+      const moments = s.moments || {};
+      const safety = s.safety || {};
+      const model = s.model || {};
+      const voice = s.voice || {};
+      const modelText = `${model.provider === "system" ? "系统默认" : model.provider} · 温度 ${model.temperature}`;
+      const tuning = s.tuning || { verbosity: 50, warmth: 60, humor: 30 };
+      const tuningText = `话量 ${tuning.verbosity} · 亲密 ${tuning.warmth} · 幽默 ${tuning.humor}`;
+      const approvalStatus = detail.farewell
+        ? row("farewell", "heart", "已好好告别", "查看那封告别信", "var(--pink)")
+        : row("farewell", "heart", "好好告别", "让 ta 认真说一次再见，然后安静退场", "var(--pink)");
+      const host = $("workbench");
+      host.innerHTML = `
+        <section class="glass card">
+          <div class="row">
+            <div class="avatar" style="background:${gradientFor(detail.persona.id)}">${initials(detail.persona.name)}</div>
+            <div class="flex1">
+              <b style="font-size:17px">${escapeHtml(detail.persona.name)}</b>
+              <div class="row" style="gap:6px;margin-top:2px">
+                <span class="dot ${running ? "ok" : ""}"></span>
+                <span class="mini" style="color:${running ? "var(--green)" : "var(--text-3)"}">${escapeHtml(status)}</span>
+              </div>
+            </div>
+            <button class="icon-btn" id="hubBtn" aria-label="更多">
+              <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="glass card">
+          <div class="lrow click" data-act="channel" style="margin:-6px -18px 0;padding:14px 18px">
+            <span class="li-ico" style="background:rgba(40,196,108,.12);color:var(--green)">${icon("wechat")}</span>
+            <div class="flex1"><b>微信渠道</b><div class="mini">${escapeHtml(wx.bound ? "已绑定" : "未绑定，点击扫码")}</div></div>
+            <span class="switch" style="pointer-events:none"><input type="checkbox" ${running ? "checked" : ""} /><span class="track"></span></span>
+          </div>
+          <div class="stat3" style="margin-top:14px">
+            <div><b data-count="${detail.turn_count || 0}">0</b><span>对话轮次</span></div>
+            <div><b data-count="${memCount}">0</b><span>人格记忆</span></div>
+            <div><b data-count="${(detail.stickers || []).length}">0</b><span>表情包</span></div>
+          </div>
+        </section>
+
+        <section class="glass card">
+          <div class="row" style="margin-bottom:4px">
+            <b class="flex1" style="font-size:13.5px">人格档案</b>
+            <button class="btn small ghost" data-act="edit">编辑</button>
+          </div>
+          <div class="chip-list" style="margin-top:10px">
+            ${styleTags.length ? styleTags.map((t) => `<span class="tag-chip">${escapeHtml(t)}</span>`).join("") : '<span class="tag-chip">待提炼</span>'}
+          </div>
+          <p class="muted" style="margin-top:11px;font-size:12.5px">${catchphrases.length ? "口头禅：" + catchphrases.map((x) => "「" + escapeHtml(x) + "」").join("") : "还没有提炼出说话风格"}</p>
+        </section>
+
+        <section class="glass card" style="padding-bottom:6px">
+          <b style="font-size:13.5px">能力设置</b>
+          <div style="margin:4px -18px 0">
+            ${row("proactive", "clock", "主动消息", proactive.enabled ? (proactive.mode === "smart" ? "智能触发" : `每 ${proactive.interval_hours} 小时`) : "未开启", "var(--orange)")}
+            ${row("moments", "moments", "朋友圈", moments.enabled ? `每天最多 ${moments.max_per_day} 条` : "未开启", "var(--v2)")}
+            ${row("safety", "warning", "防封与安全", safety.enabled ? "拟人节奏 · 敏感词 · 掉线提醒" : "已关闭", "var(--orange)")}
+            ${row("model", "cpu", "大模型", modelText, "var(--v)")}
+            ${row("tuning", "sliders", "人格调校", tuningText, "var(--pink)")}
+            ${row("advanced", "sliders", "消息与回复", "合并 · 分段 · 输入中 · 沉默", "#8e8e99")}
+            ${row("stickers", "sticker", "图片表情包", (detail.stickers || []).length ? `${detail.stickers.length} 个` : "还没有表情包", "var(--v2)")}
+            ${row("voice", "mic", "语音", (voice.asr || voice.tts) ? "已开启" : "未开启", "var(--blue)")}
+          </div>
+        </section>
+
+        <section class="glass card" style="padding-bottom:6px">
+          <b style="font-size:13.5px">回忆与告别</b>
+          <div style="margin:4px -18px 0">
+            ${row("timeline", "clock", "回忆时间线", "把你们的聊天、记忆与主动消息串成一条线", "var(--blue)")}
+            ${approvalStatus}
+          </div>
+        </section>
+
+        <section class="glass card">
+          <div class="row" style="margin-bottom:10px">
+            <b class="flex1" style="font-size:13.5px">调试对话（模拟微信联系人）</b>
+            <span class="badge b-ok">不写库</span>
+          </div>
+          <div id="dbgChat"></div>
+          <div class="field" style="margin-top:8px">
+            <select id="dbgContact" aria-label="选择联系人"><option value="">默认联系人</option></select>
+          </div>
+          <div class="inp" style="margin-top:6px">
+            <input id="dbgMsg" placeholder="输入测试消息…" autocomplete="off" />
+            <button class="card-del" id="dbgSend" aria-label="发送" style="color:var(--v)">
+              <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11 21 3l-8 18-2-8z"/></svg>
+            </button>
+          </div>
+        </section>
+      `;
+      $("hubBtn").onclick = openPersonaHub;
+      bindActions(host);
+      const input = $("dbgMsg");
+      const send = () => runDebug(input.value.trim());
+      $("dbgSend").onclick = send;
+      input.addEventListener("keydown", (event) => { if (event.key === "Enter") send(); });
+      renderDebugChat();
+      loadDebugTargets();
+      revealInit(host);
+      animateCounts(host);
+    }
+
+    function renderDebugChat() {
+      const host = $("dbgChat");
+      if (!host) return;
+      if (!debugHistory.length) {
+        host.innerHTML = `<div class="bub ta">在干嘛呀</div><div class="bub me">刚忙完工作，正想你呢～你今天累不累呀</div>`;
+        return;
+      }
+      host.innerHTML = debugHistory.map((m) => m.silenced
+        ? `<div class="mini" style="text-align:center;margin:6px 0">（判定为不想回复，实际不会发出）</div>`
+        : `<div class="bub ${m.role === "me" ? "me" : "ta"}">${escapeHtml(m.text)}</div>`
+      ).join("") + (lastDebug ? `<button class="btn small ghost wide" id="traceBtn" style="margin-top:6px">查看完整链路</button>` : "");
+      const traceBtn = $("traceBtn");
+      if (traceBtn) traceBtn.onclick = showTrace;
+    }
+
+    function showTrace() {
+      if (!lastDebug) return;
+      openSheet("调试链路", "召回记忆、历史与系统提示", '<div id="traceBox"></div>', (body) => {
+        renderTrace(body.querySelector("#traceBox"), lastDebug.data, lastDebug.peer, lastDebug.message);
+      });
+    }
+
+    function renderTrace(host, data, peerLabel, sentMessage) {
+      const pills = [
+        `<span class="pill"><span class="dot ${data.ready ? "ok" : "err"}"></span>${data.ready ? "模型已就绪" : "模型未就绪"}</span>`,
+        `<span class="pill">${escapeHtml(data.provider)}</span>`,
+        data.model ? `<span class="pill">${escapeHtml(data.model)}</span>` : "",
+        `<span class="pill">${escapeHtml(data.channel.running ? "微信在线" : "微信未在线")}</span>`,
+        `<span class="pill">记忆 ${data.memory_total} 条</span>`,
+      ].join("");
+      const hits = (data.memory_hits || []).length
+        ? data.memory_hits.map((m) => `<span class="tag-chip">${escapeHtml(m.content)}</span>`).join("")
+        : '<span class="hint">这次没有召回记忆</span>';
+      const peer = peerLabel || "对方";
+      const selfName = (detail.persona && detail.persona.name) || "TA";
+      const history = (data.history || []).length
+        ? data.history.map((t) => `<div class="kv"><span class="k">${escapeHtml(t.role === "user" ? peer : selfName)}</span><span class="v">${escapeHtml(t.content)}</span></div>`).join("")
+        : '<div class="hint">还没有历史轮次</div>';
+      host.innerHTML = `
+        <div class="dbg-row">${pills}</div>
+        ${data.error ? `<div class="hint" style="color:var(--orange);margin-top:10px">${escapeHtml(data.error)}</div>` : ""}
+        <div class="dbg-label">${escapeHtml(peer)}</div>
+        <div class="dbg-echo">${escapeHtml(sentMessage || "")}</div>
+        <div class="dbg-trace">
+          <details open><summary>召回的记忆 <span class="count">${(data.memory_hits || []).length} 条</span></summary><div class="body"><div class="chip-list">${hits}</div></div></details>
+          <details><summary>用到的历史 <span class="count">${data.history_count} 轮</span></summary><div class="body">${history}</div></details>
+          <details><summary>系统提示 <span class="count">人设与记忆</span></summary><div class="body"><pre class="codeblock">${escapeHtml(data.system_prompt || "")}</pre></div></details>
+        </div>`;
+    }
+
+    async function loadDebugTargets() {
+      try {
+        const mem = await api(`/api/personas/${personaId}/memories`);
+        debugContactNames = {};
+        (mem.contacts || []).forEach((c) => { debugContactNames[c.contact_key] = contactLabel(c); });
+        const select = $("dbgContact");
+        if (select) {
+          const current = select.value;
+          const defaultContact = (detail.persona && detail.persona.last_contact) || "";
+          const options = Object.keys(debugContactNames).map((key) =>
+            `<option value="${escapeHtml(key)}">${escapeHtml(debugContactNames[key])}</option>`).join("");
+          const defaultLabel = defaultContact && debugContactNames[defaultContact] ? "（" + escapeHtml(debugContactNames[defaultContact]) + "）" : "";
+          select.innerHTML = `<option value="">默认联系人${defaultLabel}</option>` + options;
+          if (current && [...select.options].some((o) => o.value === current)) select.value = current;
+        }
+      } catch (error) { /* 忽略 */ }
+    }
+
+    async function runDebug(message) {
+      if (debugBusy) return;
+      if (!message) { toast("先写一句话"); return; }
+      const input = $("dbgMsg");
+      const button = $("dbgSend");
+      const contactSelect = $("dbgContact");
+      const contact = contactSelect ? contactSelect.value : "";
+      input.value = "";
+      debugHistory.push({ role: "me", text: message });
+      renderDebugChat();
+      debugBusy = true;
+      if (button) button.disabled = true;
+      try {
+        const data = await api(`/api/personas/${personaId}/debug`, { method: "POST", body: JSON.stringify({ message, contact }) });
+        const defaultContact = contact || (detail.persona && detail.persona.last_contact) || "";
+        const peer = debugContactNames[defaultContact] || "对方";
+        lastDebug = { data, peer, message };
+        if (data.silenced) debugHistory.push({ role: "ta", text: "", silenced: true });
+        else debugHistory.push({ role: "ta", text: data.reply || "（空回复）" });
+        renderDebugChat();
+      } catch (error) { toastErr(error); }
+      finally { debugBusy = false; if (button) button.disabled = false; }
+    }
+
+    function openPersonaHub() {
+      const styleText = ((detail.card || {}).soul || {}).speaking_style || [];
+      openSheet("人设", styleText.slice(0, 4).join("、") || "塑造 ta 的身份、记忆与说话方式", `
+        <div class="group-title">了解与修改</div>
+        <div class="setting-group glass">
+          ${row("profile", "spark", "人设档案", "查看 ta 的身份、性格与共同回忆")}
+          ${row("edit", "edit", "编辑人设", "逐项修改身份与共同回忆")}
+        </div>
+        <div class="group-title">训练与打磨</div>
+        <div class="setting-group glass">
+          ${row("train", "download", "训练素材", "上传聊天记录 / 照片并解析")}
+          ${row("redistill", "brain", "AI 重新生成", "分析素材，更新身份与说话方式")}
+        </div>
+        <div class="group-title">记忆与会话</div>
+        <div class="setting-group glass">
+          ${row("memories", "heart", "长期记忆", "按聊天对象查看与清理")}
+          ${row("timeline", "clock", "回忆时间线", "把聊天、记忆与主动消息串成一条线")}
+          ${row("reset", "plus", "开启新会话", "清空上下文，人设保留")}
+          ${row("farewell", "heart", "好好告别", "认真说一次再见，然后安静退场", "var(--pink)")}
+        </div>
+        <div class="group-title">危险操作</div>
+        <div class="setting-group glass">
+          ${row("delete", "trash", "删除该 Agent", "人格与素材会移出，不可撤销", "var(--red)")}
+        </div>`, (body) => {
+        bindActions(body);
+      });
+    }
+
+    /* --------------------------------------------------------- 人设 -- */
+    function renderCardTab(card, tab) {
+      if (tab === "identity") {
+        const identity = card.identity || {};
+        return kv("姓名", identity.name) + kv("性别", identity.gender) + kv("生日", identity.birthday) +
+          kv("年龄", identity.age) + kv("籍贯", identity.hometown) + kv("学历", identity.education);
+      }
+      if (tab === "user") {
+        const u = card.user || {};
+        return kv("和 TA 的关系", u.relationship) + kv("认识时间", u.met_time);
+      }
+      if (tab === "soul") {
+        const soul = card.soul || {};
+        return listBlock("说话风格", soul.speaking_style || card.speaking_style) +
+          listBlock("口头禅", soul.catchphrases || card.favorite_phrases) +
+          listBlock("性格特质", card.personality);
+      }
+      const memories = card.memories || [];
+      return memories.length
+        ? memories.map((item) => kv(item.title || item.time || "回忆", item.detail)).join("")
+        : '<div class="hint">还没有共同回忆。</div>';
+    }
+
+    function openProfile() {
+      openSheet("人设档案", detail.persona.name + " 是谁", `
+        <div class="tabs" id="pTab">
+          <button class="tab active" data-tab="identity">身份</button>
+          <button class="tab" data-tab="user">用户</button>
+          <button class="tab" data-tab="soul">灵魂</button>
+          <button class="tab" data-tab="memory">共同回忆</button>
+        </div>
+        <div id="pBody" style="margin-top:16px"></div>`,
+        (body) => {
+          const draw = (tab) => { body.querySelector("#pBody").innerHTML = renderCardTab(detail.card || {}, tab); };
+          body.querySelectorAll("#pTab .tab").forEach((tab) => {
+            tab.onclick = () => {
+              body.querySelectorAll("#pTab .tab").forEach((t) => t.classList.toggle("active", t === tab));
+              refreshSegment(body.querySelector("#pTab"));
+              draw(tab.dataset.tab);
+            };
+          });
+          draw("identity");
+        });
+    }
+
+    function openEdit() {
+      const card = detail.card || {};
+      const identity = card.identity || {};
+      const user = card.user || {};
+      const soul = card.soul || {};
+      const memories = (card.memories || []).map((m) => [m.time, m.title, m.detail].map((x) => x || "").join(" | ")).join("\n");
+      openSheet("手动编辑人设", "逐项修改身份档案", `
+        <div class="split"><div class="field"><label>姓名</label><input id="eName" value="${escapeHtml(identity.name || detail.persona.name)}" /></div>
+        <div class="field"><label>性别</label><input id="eGender" value="${escapeHtml(identity.gender || "")}" /></div></div>
+        <div class="split"><div class="field"><label>生日</label><input id="eBirthday" value="${escapeHtml(identity.birthday || "")}" /></div>
+        <div class="field"><label>年龄</label><input id="eAge" value="${escapeHtml(identity.age || "")}" /></div></div>
+        <div class="split"><div class="field"><label>籍贯</label><input id="eHometown" value="${escapeHtml(identity.hometown || "")}" /></div>
+        <div class="field"><label>学历</label><input id="eEducation" value="${escapeHtml(identity.education || "")}" /></div></div>
+        <div class="split"><div class="field"><label>和 TA 的关系</label><input id="eRelation" value="${escapeHtml(user.relationship || "")}" /></div>
+        <div class="field"><label>认识时间</label><input id="eMet" value="${escapeHtml(user.met_time || "")}" /></div></div>
+        <div class="field"><label>说话风格（逗号分隔）</label><input id="eStyle" value="${escapeHtml((soul.speaking_style || card.speaking_style || []).join("，"))}" /></div>
+        <div class="field"><label>口头禅（逗号分隔）</label><input id="ePhrases" value="${escapeHtml((soul.catchphrases || card.favorite_phrases || []).join("，"))}" /></div>
+        <div class="field"><label>共同回忆（每行：时间 | 标题 | 描述）</label><textarea id="eMemories" placeholder="2019 | 初见 | 在书店认识">${escapeHtml(memories)}</textarea></div>
+        <div class="btnrow"><button class="btn primary wide" id="eSave">保存</button></div>`,
+        (body, mask) => {
+          body.querySelector("#eSave").onclick = async () => {
+            const split = (value) => value.split(/[，,、\n]/).map((x) => x.trim()).filter(Boolean);
+            const lines = body.querySelector("#eMemories").value.split("\n").map((l) => l.trim()).filter(Boolean);
+            const memoriesOut = lines.map((line) => {
+              const [time, title, text] = line.split("|").map((x) => (x || "").trim());
+              return { time: time || "", title: title || "", detail: text || "" };
+            });
+            const name = body.querySelector("#eName").value.trim();
+            try {
+              detail = await api(`/api/personas/${personaId}`, { method: "PATCH", body: JSON.stringify({
+                name,
+                card: {
+                  identity: { name, gender: body.querySelector("#eGender").value.trim(), birthday: body.querySelector("#eBirthday").value.trim(), age: body.querySelector("#eAge").value.trim(), hometown: body.querySelector("#eHometown").value.trim(), education: body.querySelector("#eEducation").value.trim() },
+                  user: { relationship: body.querySelector("#eRelation").value.trim(), met_time: body.querySelector("#eMet").value.trim() },
+                  soul: { speaking_style: split(body.querySelector("#eStyle").value), catchphrases: split(body.querySelector("#ePhrases").value) },
+                  memories: memoriesOut,
+                },
+              }) });
+              closeModal(mask); render(); toast("已保存");
+            } catch (error) { toastErr(error); }
+          };
+        });
+    }
+
+    function openRedistill() {
+      openSheet("AI 修改人设", "重新分析聊天记录，更新身份、灵魂与记忆", `
+        <div id="distillProgress">${progressHtml("准备中")}</div>
+        <div class="hint">若还没有素材，先在「训练素材」里上传聊天记录。</div>`,
+        async (body) => {
+          try {
+            const created = await api(`/api/personas/${personaId}/redistill`, { method: "POST", body: JSON.stringify({ use_llm: true }) });
+            const task = await pollTask(created.task_id, (t) => setProgress(t.step, t.progress));
+            if (task.status === "error") throw new Error(task.error || "重新蒸馏失败");
+            toast("人设已更新"); await load();
+          } catch (error) { toastErr(error); setProgress("失败：" + error.message, 0); }
+        });
+    }
+
+    /* --------------------------------------------------------- 训练 -- */
+    function openTrain() {
+      openSheet("训练素材", "上传聊天记录 / 照片，解析并蒸馏", `
+        <label class="drop" id="tDrop" for="tFile">
+          <strong>拖入或点击选择素材</strong>
+          <span class="hint">微信 / iMessage / 短信 / 社交导出 / PDF / 照片 / txt · csv</span>
+          <input id="tFile" type="file" multiple hidden accept=".txt,.csv,.json,.jsonl,.log,.md,.xml,.db,.sqlite,.sqlite3,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.html,.htm" />
+        </label>
+        <div class="filelist hint" id="tFiles"></div>
+        <div class="btnrow"><button class="btn ghost" id="tUpload">上传文件</button></div>
+        <div class="field" style="margin-top:12px"><label>或粘贴文字 / 你对 ta 的描述</label><textarea id="tPaste" placeholder="粘贴聊天记录，或写下 ta 的口头禅、性格…"></textarea></div>
+        <div class="btnrow"><button class="btn ghost wide" id="tPasteBtn">加入粘贴内容</button></div>
+        <div class="field"><label>要复刻的对象昵称（留空自动推断）</label><input id="tTarget" placeholder="例如：小鹿" /></div>
+        <div class="btnrow">
+          <button class="btn ghost" id="tIngest">解析素材</button>
+          <button class="btn primary" id="tDistill">开始蒸馏</button>
+        </div>
+        <div class="log" id="tLog">等待操作…</div>`,
+        (body) => {
+          const log = (m) => { body.querySelector("#tLog").textContent = m; };
+          const input = body.querySelector("#tFile");
+          const drop = body.querySelector("#tDrop");
+          input.onchange = () => { trainFiles = Array.from(input.files || []); body.querySelector("#tFiles").textContent = trainFiles.length ? "已选择：" + trainFiles.map((f) => f.name).join(", ") : ""; };
+          ["dragenter", "dragover"].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.add("dragover"); }));
+          ["dragleave", "drop"].forEach((type) => drop.addEventListener(type, (e) => { e.preventDefault(); drop.classList.remove("dragover"); }));
+          drop.addEventListener("drop", (e) => { trainFiles = Array.from(e.dataTransfer.files || []); body.querySelector("#tFiles").textContent = "已选择：" + trainFiles.map((f) => f.name).join(", "); });
+          body.querySelector("#tUpload").onclick = async () => {
+            if (!trainFiles.length) { toast("请先选择文件"); return; }
+            const form = new FormData();
+            trainFiles.forEach((file) => form.append("files", file));
+            log("正在上传 " + trainFiles.length + " 个文件…");
+            try { const data = await api("/api/upload", { method: "POST", body: form }); log("已上传：" + data.saved.join(", ")); toast("上传完成"); }
+            catch (error) { log("上传失败：" + error.message); }
+          };
+          body.querySelector("#tPasteBtn").onclick = async () => {
+            const text = body.querySelector("#tPaste").value.trim();
+            if (!text) { toast("粘贴内容为空"); return; }
+            try { const data = await api("/api/paste", { method: "POST", body: JSON.stringify({ text }) }); log("已加入粘贴内容：" + data.chars + " 字"); body.querySelector("#tPaste").value = ""; toast("已加入"); }
+            catch (error) { log("失败：" + error.message); }
+          };
+          body.querySelector("#tIngest").onclick = async () => {
+            log("正在解析素材…");
+            try { const data = await api("/api/ingest", { method: "POST", body: JSON.stringify({ persona_id: personaId, target: body.querySelector("#tTarget").value.trim() || null }) });
+              log(`解析完成：共 ${data.total} 条消息，目标对象 = ${data.target}`); toast("解析完成"); }
+            catch (error) { log("解析失败：" + error.message); }
+          };
+          body.querySelector("#tDistill").onclick = async () => {
+            const button = body.querySelector("#tDistill");
+            button.disabled = true; log("正在蒸馏人格（调用大模型，可能需要十几秒）…");
+            try { const data = await api("/api/distill", { method: "POST", body: JSON.stringify({ persona_id: personaId, use_llm: true }) });
+              log(`蒸馏完成：目标 = ${data.profile.name}，样本 ${data.profile.message_count} 条。`); toast("人格已生成"); await load(); }
+            catch (error) { log("蒸馏失败：" + error.message); }
+            finally { button.disabled = false; }
+          };
+        });
+    }
+
+    /* --------------------------------------------------------- 模型 -- */
+    function openModel() {
+      const m = detail.settings.model;
+      const providers = [["system", "系统默认"], ["kimi", "Kimi"], ["minimax", "MiniMax"], ["deepseek", "DeepSeek"]];
+      const radios = providers.map(([value, label]) =>
+        `<div class="g-row click" data-provider="${value}"><div class="g-text"><div class="g-title">${label}</div></div><div class="spacer"></div><span class="radio ${m.provider === value ? "on" : ""}"></span></div>`
+      ).join("");
+      const segments = ["none", "saver", "standard", "deep"].map((value) =>
+        `<button data-mem="${value}" class="${m.memory_mode === value ? "active" : ""}">${{ none: "关闭", saver: "省积分", standard: "标准", deep: "深度" }[value]}</button>`
+      ).join("");
+      openSheet("模型与记忆", "模型、温度与记忆档位", `
+        <div class="group-title">模型选择</div>
+        <div class="setting-group glass" id="providerGroup">${radios}</div>
+        <div class="hint">「系统默认」与各厂商均使用平台内置模型；未配置自备 Key 时不会因切换厂商而中断。</div>
+        <div class="field" style="margin-top:16px"><label>温度 <span id="mTempVal" style="color:var(--v)">${m.temperature}</span></label>
+          <input type="range" id="mTemp" min="0" max="1.3" step="0.1" value="${m.temperature}" style="width:100%" />
+          <div class="ticks"><span>0 严谨</span><span>0.4</span><span>0.9</span><span>1.3 随性</span></div>
+        </div>
+        <div class="group-title">上下文记忆</div>
+        <div class="segment" id="memorySegment">${segments}</div>
+        <div class="hint">省积分只记最近几条，深度记得更多、更连贯。</div>
+        <div class="group-title" style="margin-top:16px">长期记忆</div>
+        ${switchRow("自动记住关键信息", "从对话中抽取要点，之后按话题召回", m.long_term_memory, 'id="mLong"')}
+        <div class="setting-row"><div><div class="label">抽取间隔</div><div class="desc">每积累多少轮对话抽取一次</div></div><div class="spacer"></div><input type="number" id="mEvery" min="2" max="50" value="${m.memory_extract_every}" style="width:84px" /></div>
+        <div class="btnrow"><button class="btn primary wide" id="mSave">保存</button></div>`,
+        (body, mask) => {
+          let provider = m.provider;
+          let memory = m.memory_mode;
+          const temp = body.querySelector("#mTemp");
+          temp.oninput = () => { body.querySelector("#mTempVal").textContent = temp.value; };
+          body.querySelectorAll("[data-provider]").forEach((r) => {
+            r.onclick = () => { provider = r.dataset.provider; body.querySelectorAll("[data-provider] .radio").forEach((x) => x.classList.toggle("on", x.parentElement === r)); };
+          });
+          body.querySelectorAll("[data-mem]").forEach((btn) => {
+            btn.onclick = () => { memory = btn.dataset.mem; body.querySelectorAll("[data-mem]").forEach((b) => b.classList.toggle("active", b === btn)); refreshSegment(body.querySelector("#memorySegment")); };
+          });
+          body.querySelector("#mSave").onclick = async () => {
+            await saveSettings({ model: {
+              provider, temperature: Number(temp.value), memory_mode: memory,
+              long_term_memory: body.querySelector("#mLong").checked,
+              memory_extract_every: Number(body.querySelector("#mEvery").value) || 6,
+            } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    /* --------------------------------------------------- 人格调校 -- */
+    function speak(text) {
+      if (!text) { toast("没有可朗读的内容"); return; }
+      if (!window.speechSynthesis) { toast("当前浏览器不支持语音朗读"); return; }
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "zh-CN";
+        utter.rate = 0.98;
+        window.speechSynthesis.speak(utter);
+      } catch (error) { toast("朗读失败"); }
+    }
+
+    function sliderRow(id, label, desc, value, lowLabel, highLabel) {
+      return `<div class="field"><label>${escapeHtml(label)} <span id="${id}Val" style="color:var(--v)">${value}</span></label>
+        <div class="mini" style="margin:-2px 0 6px">${escapeHtml(desc)}</div>
+        <input type="range" id="${id}" min="0" max="100" step="5" value="${value}" style="width:100%" />
+        <div class="ticks"><span>${escapeHtml(lowLabel)}</span><span>50</span><span>${escapeHtml(highLabel)}</span></div>
+      </div>`;
+    }
+
+    function openTuning() {
+      const t = detail.settings.tuning || { verbosity: 50, warmth: 60, humor: 30 };
+      const ttsOn = Boolean((detail.settings.voice || {}).tts);
+      openSheet("人格调校", "随手一拖，就能改变 ta 说话的感觉", `
+        ${sliderRow("tnVerb", "话量", "越往右，回复越长、越有铺陈", t.verbosity, "惜字如金", "滔滔不绝")}
+        ${sliderRow("tnWarm", "亲密", "越往右，语气越黏人、越在意你", t.warmth, "克制理性", "亲密黏人")}
+        ${sliderRow("tnHumor", "幽默", "越往右，越爱打趣和玩梗", t.humor, "认真克制", "爱开玩笑")}
+        <div class="group-title">即时试聊</div>
+        <div class="mini" style="margin-bottom:8px">改完参数直接聊一句，不写库、不打扰微信。</div>
+        <div class="inp"><input id="tnMsg" placeholder="例如：今天好累啊" autocomplete="off" />
+          <button class="card-del" id="tnSend" aria-label="试聊" style="color:var(--v)">
+            <svg class="ic" viewBox="0 0 24 24" fill="currentColor"><path d="M3 11 21 3l-8 18-2-8z"/></svg>
+          </button></div>
+        <div id="tnOut"></div>
+        <div class="btnrow"><button class="btn primary wide" id="tnSave">保存调校</button></div>`,
+        (body, mask) => {
+          let saved = { ...t };
+          const wire = (id) => {
+            const input = body.querySelector("#" + id);
+            input.oninput = () => { body.querySelector("#" + id + "Val").textContent = input.value; };
+          };
+          ["tnVerb", "tnWarm", "tnHumor"].forEach(wire);
+          const applyPreview = async () => {
+            const message = body.querySelector("#tnMsg").value.trim();
+            if (!message) { toast("先写一句话"); return; }
+            const button = body.querySelector("#tnSend");
+            if (button.disabled) return;
+            button.disabled = true;
+            const out = body.querySelector("#tnOut");
+            out.innerHTML = progressHtml("ta 正在回复…");
+            try {
+              await api(`/api/personas/${personaId}/settings`, { method: "PUT", body: JSON.stringify({ settings: {
+                tuning: {
+                  verbosity: Number(body.querySelector("#tnVerb").value),
+                  warmth: Number(body.querySelector("#tnWarm").value),
+                  humor: Number(body.querySelector("#tnHumor").value),
+                },
+              } }) });
+              const data = await api(`/api/personas/${personaId}/debug`, { method: "POST", body: JSON.stringify({ message, contact: "" }) });
+              saved = {
+                verbosity: Number(body.querySelector("#tnVerb").value),
+                warmth: Number(body.querySelector("#tnWarm").value),
+                humor: Number(body.querySelector("#tnHumor").value),
+              };
+              const reply = data.silenced ? "（这次 ta 选择不回复）" : (data.reply || "（空回复）");
+              out.innerHTML = `<div class="bub ta">${escapeHtml(reply)}</div>
+                <div class="btnrow" style="margin-top:8px;justify-content:flex-end">
+                  <button class="btn small ghost" id="tnPlay">${ttsOn ? "朗读" : "朗读（需在语音里开启）"}</button>
+                </div>`;
+              out.querySelector("#tnPlay").onclick = () => speak(data.reply || "");
+            } catch (error) { out.innerHTML = `<div class="hint" style="color:var(--orange)">${escapeHtml(error.message || "试聊失败")}</div>`; }
+            finally { button.disabled = false; }
+          };
+          body.querySelector("#tnSend").onclick = applyPreview;
+          body.querySelector("#tnMsg").addEventListener("keydown", (event) => { if (event.key === "Enter") applyPreview(); });
+          body.querySelector("#tnSave").onclick = async () => {
+            await saveSettings({ tuning: {
+              verbosity: Number(body.querySelector("#tnVerb").value),
+              warmth: Number(body.querySelector("#tnWarm").value),
+              humor: Number(body.querySelector("#tnHumor").value),
+            } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    /* --------------------------------------------------- 回忆与告别 -- */
+    function openTimeline() {
+      window.location.href = "/app/timeline?persona=" + personaId;
+    }
+
+    function openFarewell() {
+      const existing = detail.farewell;
+      if (existing) {
+        openModal("那封告别信", `
+          <div class="sub">${escapeHtml(fmtDate(existing.created_at))}</div>
+          <div class="bub ta" style="margin:12px 0">${escapeHtml(existing.content)}</div>
+          <div class="btnrow"><button class="btn ghost wide" id="fwPlay">朗读</button>
+            <button class="btn primary wide" id="fwClose">收好</button></div>`,
+          (body, mask) => {
+            body.querySelector("#fwPlay").onclick = () => speak(existing.content);
+            body.querySelector("#fwClose").onclick = () => closeModal(mask);
+          });
+        return;
+      }
+      openModal("好好告别", `
+        <div class="sub">念念会替你认真写一封告别信发给对方，然后让这个分身安静退场。<br />人格、记忆与回忆时间线都会保留，随时可以重新启用。</div>
+        <div class="field"><label>想托 ta 说的话（可选）</label><textarea id="fwNote" rows="3" placeholder="例如：谢谢这两年，我会记得每一个晚上"></textarea></div>
+        <div class="row" style="gap:8px;margin-top:6px">
+          <button class="btn ghost flex1" id="fwCancel">再想想</button>
+          <button class="btn primary flex1" id="fwOk">开始告别</button>
+        </div>`,
+        (body, mask) => {
+          body.querySelector("#fwCancel").onclick = () => closeModal(mask);
+          const button = body.querySelector("#fwOk");
+          body.querySelector("#fwOk").onclick = async () => {
+            if (button.disabled) return;
+            if (!confirm("确定要告别吗？写好之后这个分身会停止自动回复。")) return;
+            button.disabled = true;
+            button.textContent = "正在写…";
+            try {
+              const result = await api(`/api/personas/${personaId}/farewell`, { method: "POST", body: JSON.stringify({ note: body.querySelector("#fwNote").value.trim() }) });
+              closeModal(mask);
+              toast(result.delivered ? "告别信已发出" : "告别信已写好（未绑定对方，未发送）");
+              await load();
+            } catch (error) { toastErr(error); button.disabled = false; button.textContent = "开始告别"; }
+          };
+        });
+    }
+
+    /* --------------------------------------------------- 长期记忆 -- */
+    function openMemoryList() {
+      openSheet("长期记忆", "按聊天对象隔离，各自一份", '<div id="memBox"></div>', async (body) => {
+        const box = body.querySelector("#memBox");
+        box.innerHTML = skeletonCards(2);
+        const render = async () => {
+          const data = await api(`/api/personas/${personaId}/memories`);
+          if (!data.enabled) { box.innerHTML = '<div class="hint">长期记忆已在「模型与记忆」里关闭。</div>'; return; }
+          if (!data.contacts.length) { box.innerHTML = '<div class="hint">还没有聊天对象。收到微信消息后，会自动为对方积累记忆。</div>'; return; }
+          box.innerHTML = data.contacts.map((c) => `<div class="g-row click" data-c="${escapeHtml(c.contact_key)}">
+            <div class="g-text"><div class="g-title">${escapeHtml(c.display_name || c.contact_key)}</div><div class="g-sub">${c.memory_count} 条记忆 · ${c.turn_count} 轮对话</div></div>
+            <div class="spacer"></div><span class="chevron">›</span></div>`).join("");
+          box.querySelectorAll("[data-c]").forEach((node) => {
+            node.onclick = () => openMemories(node.dataset.c, render);
+          });
+        };
+        await render();
+      });
+    }
+
+    function openMemories(contact, refreshParent) {
+      const KIND_LABEL = { fact: "事实", preference: "偏好", event: "事件", relation: "关系" };
+      openSheet("这个人的长期记忆", contact, '<div id="memItems"></div>', async (body) => {
+        const host = body.querySelector("#memItems");
+        const draw = async () => {
+          host.innerHTML = skeletonCards(2);
+          const data = await api(`/api/personas/${personaId}/memories?contact=${encodeURIComponent(contact)}`);
+          const items = data.memories || [];
+          const head = `<div class="btnrow" style="margin-bottom:10px">
+            <button class="btn small ghost" id="memRename">重命名</button>
+            <button class="btn small ghost" id="memClear">清空</button></div>`;
+          const list = items.length
+            ? items.map((m) => `<div class="mem">
+                <div class="row"><span class="k flex1">${KIND_LABEL[m.kind] || "记忆"}</span>
+                <button class="card-del" data-del="${m.id}">${icon("trash")}</button></div>
+                <p>${escapeHtml(m.content)}</p></div>`).join("")
+            : '<div class="hint">还没有记忆，多聊聊就会有了。</div>';
+          host.innerHTML = head + list;
+          host.querySelectorAll("[data-del]").forEach((node) => {
+            node.onclick = async () => {
+              if (!confirm("删除这条记忆？")) return;
+              await api(`/api/personas/${personaId}/memories/${node.dataset.del}`, { method: "DELETE" });
+              await draw(); if (refreshParent) refreshParent(); toast("已删除");
+            };
+          });
+          host.querySelector("#memClear").onclick = async () => {
+            if (!confirm("清空这个人的全部记忆？")) return;
+            await api(`/api/personas/${personaId}/memories/clear`, { method: "POST", body: JSON.stringify({ contact }) });
+            await draw(); if (refreshParent) refreshParent(); toast("已清空");
+          };
+          host.querySelector("#memRename").onclick = () => {
+            openModal("重命名联系人", `<div class="field"><label>备注名</label><input id="rnName" placeholder="例如：妈妈" /></div>
+              <div class="btnrow"><button class="btn primary wide" id="rnSave">保存</button></div>`, (mbody, mmask) => {
+              mbody.querySelector("#rnSave").onclick = async () => {
+                await api(`/api/personas/${personaId}/contacts/${encodeURIComponent(contact)}`, { method: "PATCH", body: JSON.stringify({ name: mbody.querySelector("#rnName").value.trim() }) });
+                closeModal(mmask); if (refreshParent) refreshParent(); toast("已保存");
+              };
+            });
+          };
+        };
+        await draw();
+      });
+    }
+
+    /* --------------------------------------------------------- 渠道 -- */
+    function channelStatusText(status) {
+      if (!status.available) return "未找到 weclaw，请先在服务器安装";
+      const phase = { idle: "未登录", starting: "正在生成二维码", "waiting-scan": "等待扫码", "logged-in": "已登录", running: "运行中", expired: "登录已失效", failed: "失败", unavailable: "不可用" }[status.phase] || status.phase;
+      return "阶段：" + phase + " · 转发：" + (status.running ? "运行中" : "已停止");
+    }
+
+    function openChannel() {
+      const wx = detail.channel.wechat || {};
+      openSheet("微信绑定与转发", "", `
+        <div class="setting-group glass">
+          <div class="g-row"><span class="li-ico" style="background:rgba(40,196,108,.12);color:var(--green)">${icon("wechat")}</span><div class="g-text"><div class="g-title">微信</div><div class="g-sub" id="chPhase">状态加载中…</div></div><div class="spacer"></div><span id="chState" class="pill"></span></div>
+          <div class="g-row"><span class="li-ico" style="background:rgba(18,183,245,.12);color:var(--qq)">${icon("qq")}</span><div class="g-text"><div class="g-title">QQ</div><div class="g-sub">渠道开发中</div></div></div>
+        </div>
+        <div id="chQr"></div>
+        <div class="btnrow">
+          <button class="btn primary" id="chLogin">扫码登录</button>
+          <button class="btn ghost" id="chStop">断开连接</button>
+        </div>`,
+        (body) => {
+          const mask = body.closest(".modal-mask");
+          let timer = null;
+          let lastQrSeq = "";
+          const applyStatus = (status) => {
+            body.querySelector("#chPhase").textContent = channelStatusText(status);
+            const state = body.querySelector("#chState");
+            const bound = wx.bound || status.phase === "logged-in" || status.phase === "running";
+            state.innerHTML = status.running ? '<span class="dot ok"></span>在线' : bound ? '<span class="dot warn"></span>已绑定' : '<span class="dot"></span>未绑定';
+            const channel = detail.channel.wechat;
+            const changed = channel.running !== !!status.running || channel.bound !== bound;
+            channel.running = !!status.running;
+            channel.bound = bound;
+            if (status.phase) channel.phase = status.phase;
+            if (changed) renderSettings();
+            if (status.qr_svg && status.qr_seq && status.qr_seq !== lastQrSeq) {
+              lastQrSeq = status.qr_seq;
+              body.querySelector("#chQr").innerHTML = '<div class="qr">' + status.qr_svg + "</div>";
+            }
+          };
+          const loadVerbose = async () => {
+            const status = await api("/api/wechat/status?verbose=1");
+            applyStatus(status);
+            return status;
+          };
+          const refresh = async () => {
+            if (!document.body.contains(mask)) { if (timer) clearInterval(timer); return; }
+            try {
+              const status = await api("/api/wechat/status");
+              applyStatus(status);
+              if (status.qr_seq && status.qr_seq !== lastQrSeq) await loadVerbose();
+            } catch (error) { body.querySelector("#chPhase").textContent = error.message; }
+          };
+          const startPolling = () => { if (!timer) timer = setInterval(refresh, 4000); };
+          body.querySelector("#chLogin").onclick = async () => {
+            const button = body.querySelector("#chLogin");
+            if (button.disabled) return;
+            button.disabled = true;
+            try { const status = await api("/api/wechat/login", { method: "POST" }); applyStatus(status); startPolling(); } catch (error) { toastErr(error); } finally { button.disabled = false; }
+          };
+          body.querySelector("#chStop").onclick = async () => {
+            const button = body.querySelector("#chStop");
+            if (button.disabled) return;
+            button.disabled = true;
+            try { await api("/api/wechat/stop", { method: "POST" }); toast("已断开"); await refresh(); } catch (error) { toastErr(error); } finally { button.disabled = false; }
+          };
+          loadVerbose().catch(() => {});
+          startPolling();
+        });
+    }
+
+    const NODE_META = {
+      morning: { label: "早安问候", desc: "每天早上到点先开口" },
+      goodnight: { label: "晚安问候", desc: "晚上睡前道一声晚安" },
+      anniversary: { label: "纪念日", desc: "每年这一天提起你们的回忆" },
+      care: { label: "久未联系", desc: "沉默太久时主动关心一句" },
+    };
+
+    function nodeExtra(kind, node) {
+      if (kind === "morning" || kind === "goodnight") {
+        return `<input type="time" id="nd_${kind}_time" value="${escapeHtml(node.time || (kind === "morning" ? "08:30" : "22:30"))}" />`;
+      }
+      if (kind === "anniversary") {
+        return `<span class="mini">日期</span><input id="nd_${kind}_date" placeholder="MM-DD" value="${escapeHtml(node.date || "01-01")}" style="width:76px" />`;
+      }
+      if (kind === "care") {
+        return `<span class="mini">沉默</span><input type="number" id="nd_${kind}_idle" min="6" max="720" value="${Number(node.idle_hours || 48)}" style="width:70px" /><span class="mini">小时</span>`;
+      }
+      return "";
+    }
+
+    function nodeRows(nodes) {
+      const byKind = {};
+      (nodes || []).forEach((node) => { byKind[node.kind] = node; });
+      return Object.keys(NODE_META).map((kind) => {
+        const node = byKind[kind] || { kind, enabled: false };
+        const meta = NODE_META[kind];
+        return `<div class="setting-row">
+          <div><div class="label">${escapeHtml(meta.label)}</div><div class="desc">${escapeHtml(meta.desc)}</div></div>
+          <div class="spacer"></div>
+          ${nodeExtra(kind, node)}
+          <span class="switch"><input type="checkbox" id="nd_${kind}_on" ${node.enabled ? "checked" : ""} /><span class="track"></span></span>
+        </div>`;
+      }).join("");
+    }
+
+    function collectNodes(body) {
+      return Object.keys(NODE_META).map((kind) => {
+        const node = { kind, enabled: body.querySelector("#nd_" + kind + "_on").checked };
+        if (kind === "morning" || kind === "goodnight") node.time = body.querySelector("#nd_" + kind + "_time").value || "";
+        if (kind === "anniversary") node.date = body.querySelector("#nd_" + kind + "_date").value.trim();
+        if (kind === "care") node.idle_hours = Number(body.querySelector("#nd_" + kind + "_idle").value) || 48;
+        return node;
+      });
+    }
+
+    function openProactive() {
+      const proactive = detail.settings.proactive || {};
+      const mode = proactive.mode || "interval";
+      const modes = [["interval", "固定频率"], ["smart", "智能触发"]].map(([value, label]) =>
+        `<button data-mode="${value}" class="${mode === value ? "active" : ""}">${label}</button>`
+      ).join("");
+      openSheet("主动消息", "让 ta 在你想被想起的时候先开口", `
+        ${switchRow("开启主动消息", "在时间窗内按规则主动联系", proactive.enabled, 'id="proEnabled"')}
+        <div class="group-title">触发方式</div>
+        <div class="segment" id="proModeSeg">${modes}</div>
+        <div class="hint">固定频率：每隔一段时间发一条；智能触发：结合最近对话与沉默时长，由 ta 自己判断此刻要不要开口。</div>
+        <div id="proIntervalBox">
+          <div class="setting-row"><div class="label">频率</div><div class="spacer"></div><span>每</span><input type="number" id="proInterval" min="1" max="168" value="${proactive.interval_hours}" style="width:72px" /><span>小时</span></div>
+          <div class="field"><label>开场提示词</label><textarea id="proPrompt" placeholder="留空使用默认">${escapeHtml(proactive.prompt || "")}</textarea></div>
+        </div>
+        <div id="proSmartBox">
+          <div class="setting-row"><div><div class="label">沉默多久后才考虑</div><div class="desc">对方多久没说话才进入判断</div></div><div class="spacer"></div><input type="number" id="proIdle" min="1" max="72" value="${proactive.idle_hours}" style="width:72px" /><span>小时</span></div>
+          <div class="setting-row"><div><div class="label">最短间隔</div><div class="desc">两次主动消息之间至少隔多久</div></div><div class="spacer"></div><input type="number" id="proGap" min="5" max="1440" value="${proactive.min_gap_minutes}" style="width:84px" /><span>分钟</span></div>
+          <div class="setting-row"><div><div class="label">每日上限</div><div class="desc">一天最多主动发几条</div></div><div class="spacer"></div><input type="number" id="proMax" min="1" max="50" value="${proactive.max_per_day}" style="width:72px" /><span>条</span></div>
+        </div>
+        <div class="setting-row"><div class="label">时间窗口</div><div class="spacer"></div><input type="time" id="proStart" value="${proactive.window_start}" /><span>-</span><input type="time" id="proEnd" value="${proactive.window_end}" /></div>
+        <div class="group-title">节点触发</div>
+        <div class="mini" style="margin-bottom:8px">到点自动开口：早安、晚安、纪念日、久未联系。独立于上面的频率生效，每天每个节点最多一次。</div>
+        <div class="setting-group glass">${nodeRows(proactive.nodes || [])}</div>
+        <div class="btnrow">
+          <button class="btn primary" id="proSave" style="flex:1">保存</button>
+          <button class="btn ghost" id="proRun">立即发一条</button>
+        </div>`,
+        (body, mask) => {
+          let currentMode = mode;
+          const intervalBox = body.querySelector("#proIntervalBox");
+          const smartBox = body.querySelector("#proSmartBox");
+          const syncMode = () => {
+            intervalBox.style.display = currentMode === "interval" ? "" : "none";
+            smartBox.style.display = currentMode === "smart" ? "" : "none";
+          };
+          body.querySelectorAll("[data-mode]").forEach((button) => {
+            button.onclick = () => {
+              currentMode = button.dataset.mode;
+              body.querySelectorAll("[data-mode]").forEach((b) => b.classList.toggle("active", b === button));
+              refreshSegment(body.querySelector("#proModeSeg"));
+              syncMode();
+            };
+          });
+          syncMode();
+          body.querySelector("#proSave").onclick = async () => {
+            await saveSettings({ proactive: {
+              enabled: body.querySelector("#proEnabled").checked,
+              mode: currentMode,
+              interval_hours: Number(body.querySelector("#proInterval").value) || 3,
+              window_start: body.querySelector("#proStart").value,
+              window_end: body.querySelector("#proEnd").value,
+              prompt: body.querySelector("#proPrompt").value.trim(),
+              idle_hours: Number(body.querySelector("#proIdle").value) || 6,
+              min_gap_minutes: Number(body.querySelector("#proGap").value) || 60,
+              max_per_day: Number(body.querySelector("#proMax").value) || 6,
+              nodes: collectNodes(body),
+            } });
+            closeModal(mask);
+          };
+          body.querySelector("#proRun").onclick = async () => {
+            const button = body.querySelector("#proRun");
+            if (button.disabled) return;
+            button.disabled = true;
+            try { const result = await api(`/api/personas/${personaId}/proactive/run`, { method: "POST" }); toast(result.delivered ? "已发送：" + result.text : "生成成功但发送失败，请检查微信绑定"); }
+            catch (error) { toastErr(error); }
+            finally { button.disabled = false; }
+          };
+        });
+    }
+
+    function openMoments() {
+      const moments = detail.settings.moments || {};
+      openSheet("朋友圈", "让 ta 自己记录生活，只有你能看到", `
+        ${switchRow("开启朋友圈", "在时间窗内按节奏自动发布动态", moments.enabled, 'id="moEnabled"')}
+        <div class="group-title">发布节奏</div>
+        <div class="setting-row"><div><div class="label">每日上限</div><div class="desc">一天最多自动发几条</div></div><div class="spacer"></div><input type="number" id="moMax" min="1" max="10" value="${moments.max_per_day}" style="width:72px" /><span>条</span></div>
+        <div class="setting-row"><div><div class="label">最小间隔</div><div class="desc">两条动态之间至少隔多久</div></div><div class="spacer"></div><input type="number" id="moGap" min="30" max="1440" value="${moments.min_gap_minutes}" style="width:84px" /><span>分钟</span></div>
+        <div class="field"><label>内容方向（可选）</label><textarea id="moPrompt" maxlength="200" placeholder="例如：多写工作日常、少发情绪">${escapeHtml(moments.prompt || "")}</textarea></div>
+        <div class="hint">发布时间窗沿用「主动消息」的设置；自动发布与评论回应都会按轮消耗积分，积分不足时会自动暂停。</div>
+        <div class="btnrow"><button class="btn primary" id="moSave" style="flex:1">保存</button></div>`,
+        (body, mask) => {
+          body.querySelector("#moSave").onclick = async () => {
+            await saveSettings({ moments: {
+              enabled: body.querySelector("#moEnabled").checked,
+              max_per_day: Number(body.querySelector("#moMax").value) || 2,
+              min_gap_minutes: Number(body.querySelector("#moGap").value) || 180,
+              prompt: body.querySelector("#moPrompt").value.trim(),
+            } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    function openStickers() {
+      const token = detail.channel.wechat.token || "";
+      const items = detail.stickers || [];
+      const grid = items.length
+        ? items.map((item) => token
+          ? `<img src="/public/sticker/${item.id}?token=${encodeURIComponent(token)}" alt="${escapeHtml(item.name || "")}" data-del="${item.id}" title="点击删除" />`
+          : `<div class="empty">${escapeHtml(item.name || "表情")}</div>`).join("")
+        : '<div class="empty">还没有表情包。</div>';
+      openSheet("图片与表情包", "上传表情包，AI 会学着在聊天里用", `
+        <div class="sticker-grid" id="stickerGrid">${grid}</div>
+        <div class="btnrow"><label class="btn ghost wide" for="stickerInput" style="text-align:center">上传表情包</label>
+        <input id="stickerInput" type="file" accept="image/*" hidden /></div>`,
+        (body, mask) => {
+          body.querySelectorAll("[data-del]").forEach((img) => {
+            img.onclick = async () => {
+              if (!confirm("删除这个表情包？")) return;
+              await api(`/api/personas/${personaId}/stickers/${img.dataset.del}`, { method: "DELETE" });
+              closeModal(mask); await load(); openStickers();
+            };
+          });
+          body.querySelector("#stickerInput").onchange = async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            const form = new FormData(); form.append("file", file);
+            try { await api(`/api/personas/${personaId}/stickers`, { method: "POST", body: form }); closeModal(mask); await load(); openStickers(); toast("已上传"); }
+            catch (error) { toastErr(error); }
+          };
+        });
+    }
+
+    /* --------------------------------------------------------- 高级 -- */
+    function openAdvanced() {
+      const a = detail.settings.advanced;
+      openSheet("消息与回复", "控制消息合并与回复行为", `
+        <div class="setting-row"><div><div class="label">消息合并时间</div><div class="desc">同一人连续消息的等待秒数</div></div><div class="spacer"></div><input type="number" id="fMerge" min="0" max="60" value="${a.merge_seconds}" style="width:80px" /></div>
+        ${switchRow("真人感分段回复", "把长回复拆成几条短消息，像真人一样分次发", a.split_replies, 'id="fSplit"')}
+        <div class="setting-row"><div><div class="label">最多分几段</div><div class="desc">拆分后的消息条数上限</div></div><div class="spacer"></div><input type="number" id="fSegments" min="1" max="4" value="${a.max_segments}" style="width:80px" /></div>
+        ${switchRow("输入中提示", "回复前先发送正在输入", a.typing_indicator, 'id="fTyping"')}
+        ${switchRow("允许图片回复", "", a.reply_image, 'id="fImage"')}
+        ${switchRow("允许表情包回复", "", a.reply_sticker, 'id="fSticker"')}
+        ${switchRow("回应收到图片", "对方发来图片时也回一句", a.reply_to_images, 'id="fReplyImage"')}
+        ${switchRow("允许语音回复", "", a.reply_voice, 'id="fVoice"')}
+        ${switchRow("允许沉默", "人设写了「不想说话」时可以不回复", a.allow_silence, 'id="fSilence"')}
+        ${switchRow("独立会话", "每个聊天对象各自独立上下文，不会串台", a.independent_session, 'id="fIndependent"')}
+        <div class="btnrow"><button class="btn primary wide" id="fSave">保存</button></div>`,
+        (body, mask) => {
+          body.querySelector("#fSave").onclick = async () => {
+            await saveSettings({ advanced: {
+              merge_seconds: Number(body.querySelector("#fMerge").value) || 0,
+              split_replies: body.querySelector("#fSplit").checked,
+              max_segments: Number(body.querySelector("#fSegments").value) || 1,
+              typing_indicator: body.querySelector("#fTyping").checked,
+              reply_image: body.querySelector("#fImage").checked,
+              reply_sticker: body.querySelector("#fSticker").checked,
+              reply_to_images: body.querySelector("#fReplyImage").checked,
+              reply_voice: body.querySelector("#fVoice").checked,
+              allow_silence: body.querySelector("#fSilence").checked,
+              independent_session: body.querySelector("#fIndependent").checked,
+            } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    function openSafety() {
+      const s = detail.settings.safety || {};
+      openSheet("防封与安全", "模拟真人节奏，降低账号被风控的概率", `
+        ${switchRow("启用防封策略", "关闭后下面的规则全部失效", s.enabled, 'id="sfOn"')}
+        <div class="group-title">发送节奏</div>
+        ${switchRow("拟人回复延迟", "回复前随机等待，像真人打字", s.reply_delay, 'id="sfDelay"')}
+        <div class="setting-row"><div><div class="label">最短延迟</div><div class="desc">秒</div></div><div class="spacer"></div><input type="number" id="sfMin" min="0" max="60" step="0.5" value="${s.delay_min}" style="width:80px" /></div>
+        <div class="setting-row"><div><div class="label">最长延迟</div><div class="desc">秒</div></div><div class="spacer"></div><input type="number" id="sfMax" min="0" max="120" step="0.5" value="${s.delay_max}" style="width:80px" /></div>
+        <div class="setting-row"><div><div class="label">每分钟上限</div><div class="desc">0 表示不限制</div></div><div class="spacer"></div><input type="number" id="sfMinute" min="0" max="600" value="${s.per_minute}" style="width:80px" /></div>
+        <div class="setting-row"><div><div class="label">每日上限</div><div class="desc">0 表示不限制</div></div><div class="spacer"></div><input type="number" id="sfDaily" min="0" max="5000" value="${s.daily_limit}" style="width:88px" /></div>
+        <div class="setting-row"><div><div class="label">静默时段</div><div class="desc">该时段内不主动发消息</div></div><div class="spacer"></div><input type="number" id="sfQStart" min="0" max="23" value="${s.quiet_start}" style="width:64px" /><span>点 -</span><input type="number" id="sfQEnd" min="0" max="23" value="${s.quiet_end}" style="width:64px" /><span>点</span></div>
+        <div class="group-title">内容安全</div>
+        ${switchRow("敏感词过滤", "命中词库时按下方方式处理", s.sensitive_filter, 'id="sfFilter"')}
+        <div class="segment" id="sfActionSeg">
+          <button data-act2="replace" class="${s.sensitive_action === "replace" ? "active" : ""}">替换为 ***</button>
+          <button data-act2="drop" class="${s.sensitive_action === "drop" ? "active" : ""}">整条不发送</button>
+        </div>
+        ${switchRow("掉线提醒", "微信断开或消息发不出去时通知我", s.offline_alert, 'id="sfAlert"')}
+        <div class="btnrow"><button class="btn primary wide" id="sfSave">保存</button></div>`,
+        (body, mask) => {
+          let action = s.sensitive_action || "replace";
+          body.querySelectorAll("[data-act2]").forEach((button) => {
+            button.onclick = () => {
+              action = button.dataset.act2;
+              body.querySelectorAll("[data-act2]").forEach((b) => b.classList.toggle("active", b === button));
+              refreshSegment(body.querySelector("#sfActionSeg"));
+            };
+          });
+          body.querySelector("#sfSave").onclick = async () => {
+            await saveSettings({ safety: {
+              enabled: body.querySelector("#sfOn").checked,
+              reply_delay: body.querySelector("#sfDelay").checked,
+              delay_min: Number(body.querySelector("#sfMin").value) || 0,
+              delay_max: Number(body.querySelector("#sfMax").value) || 0,
+              per_minute: Number(body.querySelector("#sfMinute").value) || 0,
+              daily_limit: Number(body.querySelector("#sfDaily").value) || 0,
+              quiet_start: Number(body.querySelector("#sfQStart").value) || 0,
+              quiet_end: Number(body.querySelector("#sfQEnd").value) || 0,
+              sensitive_filter: body.querySelector("#sfFilter").checked,
+              sensitive_action: action,
+              offline_alert: body.querySelector("#sfAlert").checked,
+            } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    function openVoice() {
+      const v = detail.settings.voice;
+      openSheet("语音", "识别对方的语音，用 ta 的声音回复", `
+        ${switchRow("语音识别", "把对方的语音转成文字", v.asr, 'id="vAsr"')}
+        ${switchRow("语音合成", "用 ta 的声音回复（开发中）", v.tts, 'id="vTts"')}
+        <div class="setting-row"><div class="label">音色</div><div class="spacer"></div>
+          <select id="vVoice">
+            <option value="female-1" ${v.voice === "female-1" ? "selected" : ""}>女声 · 温柔</option>
+            <option value="female-2" ${v.voice === "female-2" ? "selected" : ""}>女声 · 元气</option>
+            <option value="male-1" ${v.voice === "male-1" ? "selected" : ""}>男声 · 沉稳</option>
+            <option value="male-2" ${v.voice === "male-2" ? "selected" : ""}>男声 · 阳光</option>
+          </select></div>
+        <div class="btnrow"><button class="btn primary wide" id="vSave">保存</button></div>`,
+        (body, mask) => {
+          body.querySelector("#vSave").onclick = async () => {
+            await saveSettings({ voice: { asr: body.querySelector("#vAsr").checked, tts: body.querySelector("#vTts").checked, voice: body.querySelector("#vVoice").value } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    function openDevice() {
+      const d = detail.settings.device;
+      openSheet("智能设备", "手表、音箱等（开发中）", `
+        ${switchRow("启用设备联动", "", d.enabled, 'id="dEnabled"')}
+        <div class="field"><label>设备类型</label><input id="dType" placeholder="例如：智能手表" value="${escapeHtml(d.type || "")}" /></div>
+        <div class="hint">该能力仍在开发中，设置会被保存，接入后自动生效。</div>
+        <div class="btnrow"><button class="btn primary wide" id="dSave">保存</button></div>`,
+        (body, mask) => {
+          body.querySelector("#dSave").onclick = async () => {
+            await saveSettings({ device: { enabled: body.querySelector("#dEnabled").checked, type: body.querySelector("#dType").value.trim() } });
+            closeModal(mask);
+          };
+        });
+    }
+
+    /* --------------------------------------------------------- 反馈 -- */
+    function openFeedback() {
+      openModal("问题反馈交流", `
+        <div class="sub">遇到问题或有想法，写下告诉我们。</div>
+        <div class="field"><label>反馈内容</label><textarea id="fbText" placeholder="描述遇到的问题、期望的功能或使用感受…"></textarea></div>
+        <div class="btnrow"><button class="btn primary wide" id="fbSend">提交反馈</button></div>`,
+        (body, mask) => {
+          body.querySelector("#fbSend").onclick = async () => {
+            const content = body.querySelector("#fbText").value.trim();
+            if (!content) { toast("请先填写反馈内容"); return; }
+            const button = body.querySelector("#fbSend");
+            button.disabled = true;
+            try {
+              await api(`/api/personas/${personaId}/feedback`, { method: "POST", body: JSON.stringify({ content }) });
+              closeModal(mask); toast("感谢反馈");
+            } catch (error) { toastErr(error); }
+            finally { button.disabled = false; }
+          };
+        });
+    }
+
+    /* --------------------------------------------------------- 动作 -- */
+    async function doReset() {
+      if (!confirm("新会话会清空这个 Agent 记住的上下文，人设保留，确定？")) return;
+      await api(`/api/personas/${personaId}/reset`, { method: "POST" });
+      await load(); toast("已开启新会话");
+    }
+    async function doDelete() {
+      if (!confirm("确定删除这个 Agent？该操作不可撤销。")) return;
+      await api(`/api/personas/${personaId}`, { method: "DELETE" });
+      window.location.href = "/app";
+    }
+    async function doActivate() {
+      await api(`/api/personas/${personaId}/activate`, { method: "POST" });
+      await load(); toast("已设为当前使用");
+    }
+    const ACTIONS = {
+      feedback: openFeedback,
+      profile: openProfile, edit: openEdit, redistill: openRedistill, train: openTrain,
+      model: openModel, memories: openMemoryList, channel: openChannel, proactive: openProactive,
+      moments: openMoments,
+      stickers: openStickers, advanced: openAdvanced, safety: openSafety, voice: openVoice, device: openDevice,
+      tuning: openTuning, timeline: openTimeline, farewell: openFarewell,
+      reset: doReset, delete: doDelete,
+    };
+
+    /* --------------------------------------------------------- 渲染 -- */
+    async function saveSettings(patch) {
+      const result = await api(`/api/personas/${personaId}/settings`, { method: "PUT", body: JSON.stringify({ settings: patch }) });
+      detail.settings = result.settings;
+      render(); toast("已保存");
+    }
+
+    function render() {
+      const persona = detail.persona;
+      $("agentName").textContent = persona.name;
+      $("activateBtn").style.display = persona.is_active ? "none" : "";
+      document.title = persona.name + " — 念念";
+      renderSettings();
+    }
+
+    async function load() {
+      detail = await api(`/api/personas/${personaId}`);
+      render();
+      if (location.hash === "#channel") {
+        history.replaceState(null, "", location.pathname + location.search);
+        openChannel();
+      }
+    }
+
+    $("activateBtn").onclick = doActivate;
+    mountTabbar("/app");
+    load().catch(toastErr);
+    mountNotifications();
+  </script>
+</body>
+</html>

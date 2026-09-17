@@ -1,0 +1,11 @@
+{
+  "default_agent": "persona",
+  "agents": {
+    "persona": {
+      "type": "http",
+      "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+      "api_key": "not-needed",
+      "model": "persona"
+    }
+  }
+}
