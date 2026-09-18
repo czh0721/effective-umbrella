@@ -157,3 +157,23 @@ Entries discovered by the Agent during task execution should follow this format:
   - 管理后台独立在 `/admin`（独立登录页 `/admin/login`），只能直接访问 URL 进入，不在用户端暴露。
   - 普通用户不授予管理员权限。
 
+[User Instruction Summary]
+- Date: 2026-09-18
+- Context: 用户在设计积分套餐与 token 消耗时明确的商业约束
+- Instructions:
+  - 定价基准：1 元 = 10 念念币。
+  - 积分套餐定价与每轮 token 消耗扣费必须保证平台盈利，即用户支付价格需覆盖上游模型 token 成本并留出毛利；设计/调整套餐、扣费、赠送时必须做成本-收入核算。
+
+[Project Knowledge Summary]
+- Date: 2026-09-18
+- Context: Discovered by Agent while adding token 计量与成本优化
+- Category: Operations & Deployment / Build Methods
+- Instructions:
+  - 模型真实用量落 `token_usage` 表（user_id/persona_id/contact/purpose/model/platform/prompt_tokens/completion_tokens/cached_tokens/total_tokens）；写入统一走 `ex_persona/metering.py` 的 `record()`，`llm.chat_with_meta` 每次成功后自动记录，`usage` 缺失时静默跳过。
+  - 计量归属用 `metering.bind(user_id, persona_id, purpose, contact)` 上下文管理器声明；现有 purpose 取值：`chat` / `memory` / `moment` / `distill`，未绑定时记为 `unknown` 但不丢 token。
+  - 成本换算集中在 `ex_persona/pricing.py`：`INPUT_MISS_PER_MILLION=2.0`、`INPUT_HIT_PER_MILLION=0.04`、`OUTPUT_PER_MILLION=8.0`（元/百万，deepseek-flash 高峰价）；`store.token_usage_stats(since_iso)` 返回总量、按 purpose、按用户与 `cost_yuan`。
+  - 后台成本视图：`GET /api/admin/summary` 的 `token_usage` 字段、`GET /api/admin/model-cost?days=7`；后台概览「平台模型用量」卡片显示今日 token/估算成本/缓存命中。
+  - 成本优化：平台模型 `max_tokens=512`；`PersonaAgent.top_k` 默认 4→2；说话样本 6→3；系统提示顺序改为「人设 → CHAT_STYLE_RULES → 当下时间 → 额外上下文 → 检索对话 → 说话样本」，稳定前缀前置以命中 DeepSeek 上下文缓存（命中价 ¥0.04/百万 vs 未命中 ¥2/百万）。修改系统提示顺序时注意 `tests/test_platform.py::test_system_prompt_includes_chat_style_rules` 的断言。
+  - 定价目标（2026-09-18 与用户确认）：按 60% 毛利率、优化后每轮成本约 ¥0.008 反推，每轮售价 ¥0.02；积分套餐结构待定（用户要 30/90/365 天各分多档），落地前不要擅自改生产 `credit_packages`。
+
+

@@ -83,7 +83,7 @@ class PersonaAgent:
         self,
         profile_dir: str | Path = "data/profile",
         config: LLMConfig | None = None,
-        top_k: int = 4,
+        top_k: int = 2,
     ) -> None:
         self.persona: Persona = load_persona(profile_dir)
         self.config = config or load_llm_config()
@@ -132,7 +132,9 @@ class PersonaAgent:
         return [self.style_examples[index] for index, _ in self.style_index.top_k(query, k)]
 
     def build_system(self, query: str, extra_context: str = "") -> str:
-        parts = [self.persona.skill_text, clock.block()]
+        # 稳定内容（人设 + 行为规则）放在最前面，便于命中模型侧的前缀缓存；
+        # 时间、记忆、检索样本等每轮变化的内容统一往后排。
+        parts = [self.persona.skill_text, CHAT_STYLE_RULES, clock.block()]
         if extra_context:
             parts.append(extra_context)
         dialogues = self.retrieve_dialogues(query)
@@ -146,12 +148,11 @@ class PersonaAgent:
                 "下面是你过去真实发过的话，请模仿这种语气、用词和情绪：\n\n"
                 + "\n\n".join(lines)
             )
-        snippets = self.retrieve_style(query)
+        snippets = self.retrieve_style(query, k=3)
         if snippets:
             parts.append(
                 "【你以前的说话样本】\n" + "\n".join(text[:120] for text in snippets)
             )
-        parts.append(CHAT_STYLE_RULES)
         return "\n\n".join(parts)
 
     def _generate_and_clean(

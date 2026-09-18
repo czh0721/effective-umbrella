@@ -32,6 +32,7 @@ from . import (
     ingest,
     media_reply,
     memories,
+    metering,
     moments,
     observability,
     outbox,
@@ -866,6 +867,7 @@ def build_config(user_id: int, persona: dict | None = None) -> LLMConfig:
                 api_key=platform.api_key,
                 base_url=platform.base_url,
                 model=platform.model,
+                max_tokens=512,
                 fallback_reply=fallback_reply,
                 platform=True,
             )
@@ -1981,7 +1983,8 @@ def _run_distill_task(task_id: str, user_id: int, persona_id: int, use_llm: bool
             except PlatformCapped as error:
                 observability.METRICS.inc("distill.platform_capped")
                 raise RuntimeError(f"{error}，可稍后重试或改用自带 API Key") from error
-        result = distill.run(directory, config=config_obj, use_llm=use_llm, hints=hints)
+        with metering.bind(user_id, persona_id, "distill"):
+            result = distill.run(directory, config=config_obj, use_llm=use_llm, hints=hints)
         _agents.pop(f"{user_id}:{persona_id}", None)
         store.update_persona(user_id, persona_id, status="ready")
         _update_task(task_id, status="done", progress=100, step="完成",
@@ -2521,7 +2524,8 @@ def publish_moment_api(persona_id: int, user: dict = Depends(current_user)) -> d
     stickers = store.list_stickers(user["id"], persona_id)
     memories = store.list_memories(user["id"], persona_id, limit=12)
     try:
-        text, sticker_id = moments.compose(agent, settings, memories, stickers)
+        with metering.bind(user["id"], persona_id, "moment"):
+            text, sticker_id = moments.compose(agent, settings, memories, stickers)
     except Exception:  # noqa: BLE001
         text, sticker_id = "", 0
     if not text:
@@ -2964,9 +2968,10 @@ def api_distill(payload: DistillRequest, user: dict = Depends(current_user)) -> 
         except PlatformCapped as error:
             raise HTTPException(status_code=429, detail=str(error)) from error
     try:
-        result = distill.run(
-            Path(persona["dir"]), config=config_obj, use_llm=payload.use_llm
-        )
+        with metering.bind(user["id"], persona["id"], "distill"):
+            result = distill.run(
+                Path(persona["dir"]), config=config_obj, use_llm=payload.use_llm
+            )
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RuntimeError as error:
@@ -3259,7 +3264,8 @@ def _extract_task(user_id: int, persona_id: int, contact: str) -> None:
             item["content"]
             for item in store.list_memories(user_id, persona_id, contact)
         ]
-        fresh = memories.extract(agent.config, persona["name"], turns, existing)
+        with metering.bind(user_id, persona_id, "memory", contact):
+            fresh = memories.extract(agent.config, persona["name"], turns, existing)
         if fresh is None:
             return
         for item in fresh:
@@ -3498,12 +3504,13 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
                 try:
                     if is_platform:
                         store.add_platform_call(user_id)
-                    reply = agent.reply(
-                        message_for_llm,
-                        history=history,
-                        temperature=temperature,
-                        extra_context=extra_context,
-                    )
+                    with metering.bind(user_id, persona["id"], "chat", contact):
+                        reply = agent.reply(
+                            message_for_llm,
+                            history=history,
+                            temperature=temperature,
+                            extra_context=extra_context,
+                        )
                 except LLMError as error:
                     if charged:
                         try:
@@ -3775,6 +3782,7 @@ def admin_summary(admin: dict = Depends(current_admin)) -> dict:
         "reports": store.count_reports(status=""),
         "open_reports": store.count_reports(status="open"),
         "platform_usage": store.platform_usage_stats(_day_start_iso()),
+        "token_usage": store.token_usage_stats(_day_start_iso()),
         "outbox": store.outbox_stats(),
         "credits": store.credits_totals(),
         "coins": store.coins_totals(),
@@ -3795,6 +3803,19 @@ def admin_dashboard_api(
     if refresh:
         store.invalidate_dashboard()
     return store.admin_dashboard(days)
+
+
+@app.get("/api/admin/model-cost")
+def admin_model_cost(
+    days: int = 7,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """模型 token 成本：按天窗口汇总用量、缓存命中与估算成本。"""
+    span = max(1, min(int(days), 90))
+    since = (clock.now_local() - timedelta(days=span - 1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return store.token_usage_stats(since.astimezone(timezone.utc).isoformat())
 
 
 @app.get("/api/admin/users")

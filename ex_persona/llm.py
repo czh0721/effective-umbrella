@@ -1,5 +1,6 @@
 import time
 
+from . import metering
 from .config import LLMConfig
 
 try:
@@ -100,6 +101,7 @@ def chat_with_meta(
             response = _request(client, payload)
     else:
         response = _request(client, payload)
+    metering.record(config, getattr(response, "usage", None))
     choice = response.choices[0]
     return choice.message.content or "", getattr(choice, "finish_reason", None)
 

@@ -595,7 +595,8 @@ class UnitTest(unittest.TestCase):
         system = instance.build_system("在吗")
         self.assertIn("反问", system, "系统提示必须要求人格适时反问")
         self.assertIn("每条单独占一行", system, "系统提示必须允许连发多条")
-        self.assertTrue(system.endswith(agent_module.CHAT_STYLE_RULES))
+        # 稳定的人设与行为规则前置以命中前缀缓存，时间等易变内容后置。
+        self.assertLess(system.index(agent_module.CHAT_STYLE_RULES), system.index("【当下时间】"))
 
     def test_safe_join_sanitizes_traversal(self):
         root = Path(_TMP.name) / "safe"

@@ -7,7 +7,7 @@
 import threading
 from datetime import datetime, timezone
 
-from . import clock, media_reply, persona_settings, store
+from . import clock, media_reply, metering, persona_settings, store
 
 # 朋友圈写作规则：与 CHAT_STYLE_RULES 分离，避免把一对一聊天的口吻带进动态。
 MOMENT_STYLE_RULES = """【朋友圈写作方式】
@@ -199,7 +199,8 @@ class MomentScheduler:
         try:
             stickers = store.list_stickers(user_id, persona_id)
             memories = store.list_memories(user_id, persona_id, limit=12)
-            text, sticker_id = compose(agent, settings, memories, stickers, now)
+            with metering.bind(user_id, persona_id, "moment"):
+                text, sticker_id = compose(agent, settings, memories, stickers, now)
         except Exception:  # noqa: BLE001
             text, sticker_id = "", 0
         if not text:

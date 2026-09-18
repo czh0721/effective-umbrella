@@ -217,6 +217,22 @@ CREATE TABLE IF NOT EXISTS platform_usage (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_platform_usage_user ON platform_usage(user_id, created_at);
+CREATE TABLE IF NOT EXISTS token_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL DEFAULT 0,
+    persona_id INTEGER NOT NULL DEFAULT 0,
+    contact TEXT NOT NULL DEFAULT '',
+    purpose TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    platform INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_created ON token_usage(created_at);
+CREATE INDEX IF NOT EXISTS idx_token_usage_user ON token_usage(user_id, created_at);
 CREATE TABLE IF NOT EXISTS admin_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id INTEGER NOT NULL DEFAULT 0,
@@ -4216,6 +4232,131 @@ def platform_usage_stats(since_iso: str = "") -> dict:
     with connect() as conn:
         rows = conn.execute(query, (since_iso,) if since_iso else ()).fetchall()
     return {"by_user": [dict(row) for row in rows]}
+
+
+def record_token_usage(
+    user_id: int = 0,
+    persona_id: int = 0,
+    contact: str = "",
+    purpose: str = "",
+    model: str = "",
+    platform: int = 0,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    cached_tokens: int = 0,
+    total_tokens: int = 0,
+) -> None:
+    """记录一次模型调用的 token 用量（失败不影响业务，由调用方兜底）。"""
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "INSERT INTO token_usage (user_id, persona_id, contact, purpose, model, platform,"
+            " prompt_tokens, completion_tokens, cached_tokens, total_tokens, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(user_id or 0),
+                int(persona_id or 0),
+                contact or "",
+                purpose or "unknown",
+                model or "",
+                1 if platform else 0,
+                max(int(prompt_tokens or 0), 0),
+                max(int(completion_tokens or 0), 0),
+                max(int(cached_tokens or 0), 0),
+                max(int(total_tokens or 0), 0),
+                utcnow(),
+            ),
+        )
+
+
+def token_usage_stats(since_iso: str = "") -> dict:
+    """按时间窗汇总 token 用量与估算成本，供后台成本看板使用。"""
+    _ensure()
+    from . import pricing
+
+    where = " WHERE created_at >= ?" if since_iso else ""
+    params: tuple = (since_iso,) if since_iso else ()
+    platform_where = (" WHERE created_at >= ? AND platform = 1") if since_iso else " WHERE platform = 1"
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS calls,"
+            " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+            " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+            " COALESCE(SUM(cached_tokens), 0) AS cached_tokens,"
+            " COALESCE(SUM(total_tokens), 0) AS total_tokens"
+            f" FROM token_usage{where}",
+            params,
+        ).fetchone()
+        platform_row = conn.execute(
+            "SELECT COUNT(*) AS calls,"
+            " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+            " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+            " COALESCE(SUM(cached_tokens), 0) AS cached_tokens,"
+            " COALESCE(SUM(total_tokens), 0) AS total_tokens"
+            f" FROM token_usage{platform_where}",
+            params,
+        ).fetchone()
+        purposes = conn.execute(
+            "SELECT purpose, COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+            " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+            " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+            " COALESCE(SUM(cached_tokens), 0) AS cached_tokens"
+            f" FROM token_usage{where} GROUP BY purpose ORDER BY total_tokens DESC",
+            params,
+        ).fetchall()
+        users = conn.execute(
+            "SELECT user_id, COUNT(*) AS calls, COALESCE(SUM(total_tokens), 0) AS total_tokens,"
+            " COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,"
+            " COALESCE(SUM(completion_tokens), 0) AS completion_tokens,"
+            " COALESCE(SUM(cached_tokens), 0) AS cached_tokens"
+            f" FROM token_usage{where} GROUP BY user_id ORDER BY total_tokens DESC LIMIT 50",
+            params,
+        ).fetchall()
+    totals = dict(row) if row is not None else {}
+    platform_totals = dict(platform_row) if platform_row is not None else {}
+    cost = pricing.estimate_cost(
+        totals.get("prompt_tokens", 0),
+        totals.get("completion_tokens", 0),
+        totals.get("cached_tokens", 0),
+    )
+    platform = {
+        "calls": int(platform_totals.get("calls", 0) or 0),
+        "prompt_tokens": int(platform_totals.get("prompt_tokens", 0) or 0),
+        "completion_tokens": int(platform_totals.get("completion_tokens", 0) or 0),
+        "cached_tokens": int(platform_totals.get("cached_tokens", 0) or 0),
+        "total_tokens": int(platform_totals.get("total_tokens", 0) or 0),
+    }
+    platform["cost_yuan"] = pricing.estimate_cost(
+        platform["prompt_tokens"], platform["completion_tokens"], platform["cached_tokens"]
+    )
+    result = {
+        "calls": int(totals.get("calls", 0) or 0),
+        "prompt_tokens": int(totals.get("prompt_tokens", 0) or 0),
+        "completion_tokens": int(totals.get("completion_tokens", 0) or 0),
+        "cached_tokens": int(totals.get("cached_tokens", 0) or 0),
+        "total_tokens": int(totals.get("total_tokens", 0) or 0),
+        "cost_yuan": cost,
+        "platform": platform,
+        "by_purpose": [],
+        "by_user": [],
+    }
+    for item in purposes:
+        data = dict(item)
+        data["cost_yuan"] = pricing.estimate_cost(
+            data.get("prompt_tokens", 0),
+            data.get("completion_tokens", 0),
+            data.get("cached_tokens", 0),
+        )
+        result["by_purpose"].append(data)
+    for item in users:
+        data = dict(item)
+        data["cost_yuan"] = pricing.estimate_cost(
+            data.get("prompt_tokens", 0),
+            data.get("completion_tokens", 0),
+            data.get("cached_tokens", 0),
+        )
+        result["by_user"].append(data)
+    return result
 
 
 def count_users() -> int:

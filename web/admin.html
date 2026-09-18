@@ -639,7 +639,12 @@
             </div>`).join("")}</div>`
         : "";
 
-      $("usageHead").innerHTML = headIcon("spark", "平台模型用量", '<span class="hint">今日 · 按用户</span>');
+      const tokens = ((summary.token_usage || {}).platform || {});
+      const tokenTotal = Number(tokens.total_tokens || 0);
+      const tokenCost = Number(tokens.cost_yuan || 0);
+      $("usageHead").innerHTML = headIcon("spark", "平台模型用量",
+        '<span class="hint">今日 ' + tokenTotal.toLocaleString() + ' tokens · 估算 ¥' + tokenCost.toFixed(2) +
+        " · 缓存命中 " + Number(tokens.cached_tokens || 0).toLocaleString() + "</span>");
       const usage = ((summary.platform_usage || {}).by_user || []);
       const names = new Map(state.users.map((item) => [item.id, item.username]));
       const usageItems = usage
