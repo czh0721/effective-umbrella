@@ -174,6 +174,6 @@ Entries discovered by the Agent during task execution should follow this format:
   - 成本换算集中在 `ex_persona/pricing.py`：`INPUT_MISS_PER_MILLION=2.0`、`INPUT_HIT_PER_MILLION=0.04`、`OUTPUT_PER_MILLION=8.0`（元/百万，deepseek-flash 高峰价）；`store.token_usage_stats(since_iso)` 返回总量、按 purpose、按用户与 `cost_yuan`。
   - 后台成本视图：`GET /api/admin/summary` 的 `token_usage` 字段、`GET /api/admin/model-cost?days=7`；后台概览「平台模型用量」卡片显示今日 token/估算成本/缓存命中。
   - 成本优化：平台模型 `max_tokens=512`；`PersonaAgent.top_k` 默认 4→2；说话样本 6→3；系统提示顺序改为「人设 → CHAT_STYLE_RULES → 当下时间 → 额外上下文 → 检索对话 → 说话样本」，稳定前缀前置以命中 DeepSeek 上下文缓存（命中价 ¥0.04/百万 vs 未命中 ¥2/百万）。修改系统提示顺序时注意 `tests/test_platform.py::test_system_prompt_includes_chat_style_rules` 的断言。
-  - 定价目标（2026-09-18 与用户确认）：按 60% 毛利率、优化后每轮成本约 ¥0.008 反推，每轮售价 ¥0.02；积分套餐结构待定（用户要 30/90/365 天各分多档），落地前不要擅自改生产 `credit_packages`。
+  - 定价规则（2026-09-18 与用户确认）：1 元 = 10 念念币、1 念念币 = 100 积分、每轮扣 20 积分（即 ¥0.02/轮）；按 60% 毛利率、优化后每轮成本约 ¥0.008 反推。套餐结构为 `store.PACKAGE_TIERS`：30/90/365 天各轻享/标准/尊享三档（尊享附赠蒸馏券 1/2/3 张），另有入门 `体验包`。一次性迁移 `_migrate_package_tiers`（meta 标记 `package_tiers_v1`）按名 upsert 档位并下架旧 `标准包`/`尊享包`；后台改价后不会被重启覆盖。调整套餐/扣费/赠送时必须做成本-收入核算。
 
 
