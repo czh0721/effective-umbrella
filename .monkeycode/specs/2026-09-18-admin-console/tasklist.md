@@ -71,3 +71,19 @@
 - [x] 测试与验证
   - [x] `tests/test_admin_console.py` 扩至 16 项；全量 375 单测通过；`ruff` 通过；e2e 94/94
   - [x] Playwright 后台渲染探针覆盖内容/运营/系统/管理员分区，无 JS 报错
+
+## P2 实施记录（已完成）
+
+- [x] CSV 导出
+  - [x] `_csv_response` 统一 UTF-8 BOM 与 `attachment` 文件名
+  - [x] `GET /api/admin/users/export`（复用全部筛选条件，`export_users` 翻页取全量）
+  - [x] `GET /api/admin/orders/export`（`list_orders` 上限放宽到 5000）
+  - [x] `GET /api/admin/audit/export`（复用操作人/动作/目标/时间筛选）
+  - [x] 前端用户、订单、审计三处导出按钮，携带当前筛选
+- [x] 看板缓存打磨
+  - [x] `GET /api/admin/dashboard?refresh=1` 跳过缓存；顶部刷新按钮触发强制刷新
+- [x] 移动端抽屉打磨
+  - [x] 抽屉宽度 `min(288px, 84vw)`、底部安全区、导航区独立滚动与 overscroll 收敛
+  - [x] `aria-expanded`/`aria-controls` 与开关焦点管理，Esc 关闭
+- [x] 验证
+  - [x] 全量 378 单测通过；`ruff` 通过；e2e 98/98
