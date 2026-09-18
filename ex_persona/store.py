@@ -445,7 +445,11 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "client_id": "TEXT NOT NULL DEFAULT ''",
         "error_kind": "TEXT NOT NULL DEFAULT ''",
     },
-    "sessions": {"pending_totp": "INTEGER NOT NULL DEFAULT 0"},
+    "sessions": {
+        "pending_totp": "INTEGER NOT NULL DEFAULT 0",
+        "ip": "TEXT NOT NULL DEFAULT ''",
+        "user_agent": "TEXT NOT NULL DEFAULT ''",
+    },
     "users": {
         "credits": "INTEGER NOT NULL DEFAULT 0",
         "coins": "INTEGER NOT NULL DEFAULT 0",
@@ -468,6 +472,7 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "locked_until": "TEXT NOT NULL DEFAULT ''",
     },
     "moments": {"hidden": "INTEGER NOT NULL DEFAULT 0"},
+    "admin_alerts": {"target": "TEXT NOT NULL DEFAULT ''"},
     "credit_packages": {
         "coins": "INTEGER NOT NULL DEFAULT 0",
         "validity_days": "INTEGER NOT NULL DEFAULT 30",
@@ -1919,16 +1924,61 @@ def delete_user_sessions(user_id: int, keep_token: str | None = None) -> None:
 # 会话
 # --------------------------------------------------------------------------- #
 
-def create_session(user_id: int, token: str, days: int = 7, pending_totp: bool = False) -> str:
+def create_session(
+    user_id: int,
+    token: str,
+    days: int = 7,
+    pending_totp: bool = False,
+    ip: str = "",
+    user_agent: str = "",
+) -> str:
     _ensure()
     expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     with _lock, connect() as conn:
         conn.execute(
-            "INSERT INTO sessions (token, user_id, created_at, expires_at, pending_totp)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (token, user_id, utcnow(), expires, 1 if pending_totp else 0),
+            "INSERT INTO sessions (token, user_id, created_at, expires_at, pending_totp, ip, user_agent)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (token, user_id, utcnow(), expires, 1 if pending_totp else 0, ip or "", user_agent or ""),
         )
     return expires
+
+
+def list_user_sessions(user_id: int, limit: int = 100) -> list[dict]:
+    """列出用户当前有效会话（只暴露 token 前缀，不返回完整凭据）。"""
+    _ensure()
+    now_iso = utcnow()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT token, created_at, expires_at, pending_totp, ip, user_agent"
+            " FROM sessions WHERE user_id = ? AND expires_at > ?"
+            " ORDER BY created_at DESC LIMIT ?",
+            (int(user_id), now_iso, int(limit)),
+        ).fetchall()
+    return [
+        {
+            "token_prefix": (row["token"] or "")[:8],
+            "created_at": row["created_at"],
+            "expires_at": row["expires_at"],
+            "pending_totp": bool(row["pending_totp"]),
+            "ip": row["ip"] or "",
+            "user_agent": row["user_agent"] or "",
+        }
+        for row in rows
+    ]
+
+
+def revoke_user_session(user_id: int, prefix: str) -> bool:
+    """按 token 前缀下线某用户的一条会话，返回是否命中。"""
+    value = (prefix or "").strip()
+    if not value:
+        return False
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM sessions WHERE user_id = ? AND token LIKE ?",
+            (int(user_id), value + "%"),
+        )
+        return bool(cursor.rowcount)
 
 
 def get_user_by_session(token: str | None) -> dict | None:
@@ -2156,24 +2206,35 @@ def purge_expired_admin_sessions() -> None:
         conn.execute("DELETE FROM admin_sessions WHERE expires_at < ?", (utcnow(),))
 
 
-def add_admin_alert(admin_id: int, kind: str, message: str) -> int:
+def add_admin_alert(admin_id: int, kind: str, message: str, target: str = "") -> int:
     """写入一条运营告警（掉线、发送失败、触发配额等），仅管理员可见。"""
     _ensure()
     with _lock, connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO admin_alerts (admin_id, kind, message, read_at, created_at)"
-            " VALUES (?, ?, ?, '', ?)",
-            (admin_id, kind or "info", message or "", utcnow()),
+            "INSERT INTO admin_alerts (admin_id, kind, message, target, read_at, created_at)"
+            " VALUES (?, ?, ?, ?, '', ?)",
+            (admin_id, kind or "info", message or "", target or "", utcnow()),
         )
         return int(cursor.lastrowid or 0)
 
 
-def list_admin_alerts(admin_id: int, limit: int = 20, unread_only: bool = False) -> list[dict]:
+def list_admin_alerts(
+    admin_id: int,
+    limit: int = 20,
+    unread_only: bool = False,
+    kind: str = "",
+    status: str = "",
+) -> list[dict]:
     _ensure()
     query = "SELECT * FROM admin_alerts WHERE admin_id = ?"
     params: list = [admin_id]
-    if unread_only:
+    if unread_only or status == "unread":
         query += " AND read_at = ''"
+    elif status == "read":
+        query += " AND read_at != ''"
+    if kind:
+        query += " AND kind = ?"
+        params.append(kind)
     query += " ORDER BY id DESC LIMIT ?"
     params.append(max(int(limit), 1))
     with connect() as conn:
@@ -2198,6 +2259,17 @@ def mark_admin_alerts_read(admin_id: int) -> None:
             "UPDATE admin_alerts SET read_at = ? WHERE admin_id = ? AND read_at = ''",
             (utcnow(), admin_id),
         )
+
+
+def mark_admin_alert_read(admin_id: int, alert_id: int) -> bool:
+    """把某条告警标记为已读，返回是否命中。"""
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "UPDATE admin_alerts SET read_at = ? WHERE admin_id = ? AND id = ? AND read_at = ''",
+            (utcnow(), admin_id, int(alert_id)),
+        )
+        return bool(cursor.rowcount)
 
 
 # --------------------------------------------------------------------------- #
@@ -4594,6 +4666,51 @@ def list_redemption_codes(limit: int = 200, status: str = "") -> list[dict]:
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def export_redemption_codes(status: str = "") -> list[dict]:
+    """全量导出兑换码（含兑换用户），不做分页截断。"""
+    _ensure()
+    query = (
+        "SELECT c.id, c.code, c.coins, c.batch, c.note, c.status, c.created_by,"
+        " c.created_at, c.redeemed_by, c.redeemed_at, u.username AS redeemed_username"
+        " FROM redemption_codes c LEFT JOIN users u ON u.id = c.redeemed_by"
+    )
+    params: list = []
+    if status:
+        query += " WHERE c.status = ?"
+        params.append(status)
+    query += " ORDER BY c.id DESC"
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def batch_void_redemption_codes(
+    ids: list[int] | None = None, status: str = "", all_matching: bool = False
+) -> dict:
+    """批量作废兑换码，只处理 unused，其余计入 skipped。"""
+    _ensure()
+    target_ids = [int(value) for value in (ids or [])]
+    if not all_matching and not target_ids:
+        return {"voided": 0, "skipped": 0}
+    with _lock, connect() as conn:
+        if all_matching:
+            if status in ("", "unused"):
+                rows = conn.execute(
+                    "SELECT id FROM redemption_codes WHERE status = 'unused'"
+                ).fetchall()
+                target_ids = [int(row["id"]) for row in rows]
+        if not target_ids:
+            return {"voided": 0, "skipped": 0}
+        placeholders = ",".join("?" for _ in target_ids)
+        cursor = conn.execute(
+            f"UPDATE redemption_codes SET status = 'void'"
+            f" WHERE status = 'unused' AND id IN ({placeholders})",
+            target_ids,
+        )
+        voided = int(cursor.rowcount or 0)
+    return {"voided": voided, "skipped": max(len(target_ids) - voided, 0)}
 
 
 def redemption_stats() -> dict:

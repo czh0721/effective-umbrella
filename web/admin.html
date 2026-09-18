@@ -285,6 +285,10 @@
             <div class="acard-head" id="taskHead"></div>
             <div id="taskList"></div>
           </div>
+          <div class="acard">
+            <div class="acard-head" id="logHead"></div>
+            <div id="logList"></div>
+          </div>
         </section>
 
         <section class="panel" id="panel-admins">
@@ -372,11 +376,14 @@
       recovery: [],
       orders: [], ordersRevenue: null, dashboard: null, orderQuery: "",
       platform: null, creditPackages: [], creditTotals: null, coinsTotals: null,
-      redemptionItems: [], redemptionStats: null, redemptionFilter: "",
+      redemptionItems: [], redemptionStats: null, redemptionFilter: "", redemptionSelected: [],
       reportFilter: "all", auditAction: "all", userQuery: "", auditQuery: "",
       personas: [], moments: [], contentKind: "personas", contentQuery: "",
       announcements: [], admins: [], flags: {}, bindings: [], backups: [], tasks: [],
       locked: [],
+      alertItems: null, alertKind: "", alertStatus: "unread",
+      logItems: [], logLevel: "", logKeyword: "",
+      userSessions: [],
       adminQuery: "",
     };
 
@@ -540,6 +547,7 @@
       $("pageTitle").textContent = meta.title;
       closeNav();
       revealInit();
+      if (name === "system" && !state.logItems.length) loadLogs();
     }
 
     /* ----------------------------------------------------------- overview */
@@ -603,31 +611,7 @@
         { key: "turns", label: "对话轮次", color: "#28c46c" },
       ]);
 
-      const alertKind = {
-        platform: "平台模型", platform_cap: "额度", llm: "模型调用", persona: "人格数据",
-        send_failed: "出站发送", crisis: "情感安全", report: "用户举报",
-      };
-      const alerts = summary.alerts || [];
-      $("alertHead").innerHTML = headIcon("warning", "运营告警",
-        alerts.length
-          ? '<span class="spacer"></span><button class="btn small ghost" id="alertRead">全部已读</button>'
-          : '<span class="spacer"></span><span class="tag plain">无未读</span>');
-      $("alertList").innerHTML = alerts.length
-        ? `<div class="feed">${alerts.map((item) => `
-            <div class="feed-item">
-              <div class="feed-dot" style="background:${TONE.orange.soft};color:${TONE.orange.color}">${icon("warning")}</div>
-              <div class="feed-body">
-                <div class="feed-title">${escapeHtml(alertKind[item.kind] || item.kind || "提醒")}</div>
-                <div class="feed-sub">${escapeHtml(item.message || "")}</div>
-                <div class="feed-time">${fmtTime(item.created_at)}</div>
-              </div>
-            </div>`).join("")}</div>`
-        : emptyState("暂无未读告警", "warning");
-      const alertRead = $("alertRead");
-      if (alertRead) alertRead.onclick = async () => {
-        try { await api("/api/admin/alerts/read", { method: "POST" }); toast("已标记为已读"); loadAll(); }
-        catch (error) { toast(error.message); }
-      };
+      renderAlerts();
 
       const recovery = state.recovery || [];
       $("recoveryCard").style.display = recovery.length ? "" : "none";
@@ -686,6 +670,76 @@
 
       $("recentHead").innerHTML = headIcon("clock", "最近操作", '<span class="spacer"></span><button class="btn small ghost" data-tab="audit">全部</button>');
       renderRecentAudit();
+    }
+
+    const ALERT_KIND_LABEL = {
+      platform: "平台模型", platform_cap: "额度", llm: "模型调用", persona: "人格数据",
+      send_failed: "出站发送", crisis: "情感安全", report: "用户举报", recovery: "找回密码",
+    };
+
+    function renderAlerts() {
+      const items = state.alertItems || [];
+      const kindOptions = Object.keys(ALERT_KIND_LABEL)
+        .map((key) => `<option value="${key}"${state.alertKind === key ? " selected" : ""}>${ALERT_KIND_LABEL[key]}</option>`)
+        .join("");
+      $("alertHead").innerHTML = headIcon("warning", "运营告警",
+        '<span class="spacer"></span>' +
+        '<select class="select small" id="alertKindFilter"><option value="">全部类型</option>' + kindOptions + "</select>" +
+        '<select class="select small" id="alertStatusFilter">' +
+        `<option value="unread"${state.alertStatus === "unread" ? " selected" : ""}>未读</option>` +
+        `<option value="read"${state.alertStatus === "read" ? " selected" : ""}>已读</option>` +
+        `<option value=""${state.alertStatus === "" ? " selected" : ""}>全部</option></select>` +
+        (items.some((item) => !item.read_at)
+          ? '<button class="btn small ghost" id="alertRead">全部已读</button>' : ""));
+      $("alertList").innerHTML = items.length
+        ? `<div class="feed">${items.map((item) => {
+            const jump = alertTarget(item.target);
+            return `<div class="feed-item">
+              <div class="feed-dot" style="background:${TONE.orange.soft};color:${TONE.orange.color}">${icon("warning")}</div>
+              <div class="feed-body">
+                <div class="feed-title">${escapeHtml(ALERT_KIND_LABEL[item.kind] || item.kind || "提醒")}${item.read_at ? "" : '<span class="tag plain" style="margin-left:6px">未读</span>'}</div>
+                <div class="feed-sub">${escapeHtml(item.message || "")}</div>
+                <div class="feed-time">${fmtTime(item.created_at)}${jump ? " · 关联 " + escapeHtml(jump.label) : ""}</div>
+              </div>
+              ${jump ? `<button class="btn small ghost" data-alert-jump="${escapeHtml(item.target)}">查看</button>` : ""}
+              ${item.read_at ? "" : `<button class="btn small ghost" data-alert-read="${item.id}">已读</button>`}
+            </div>`;
+          }).join("")}</div>`
+        : emptyState(state.alertStatus === "unread" ? "暂无未读告警" : "暂无告警", "warning");
+      const kindFilter = $("alertKindFilter");
+      if (kindFilter) kindFilter.onchange = () => { state.alertKind = kindFilter.value; loadAlerts(); };
+      const statusFilter = $("alertStatusFilter");
+      if (statusFilter) statusFilter.onchange = () => { state.alertStatus = statusFilter.value; loadAlerts(); };
+      const alertRead = $("alertRead");
+      if (alertRead) alertRead.onclick = async () => {
+        try { await api("/api/admin/alerts/read", { method: "POST" }); toast("已标记为已读"); loadAlerts(); }
+        catch (error) { toast(error.message); }
+      };
+    }
+
+    function alertTarget(target) {
+      const value = String(target || "");
+      if (value.startsWith("user:")) return { tab: "users", label: "用户 #" + value.slice(5) };
+      if (value.startsWith("report:")) return { tab: "reports", label: "举报 #" + value.slice(7) };
+      return null;
+    }
+
+    function alertQuery() {
+      let query = "";
+      if (state.alertKind) query += "&kind=" + encodeURIComponent(state.alertKind);
+      if (state.alertStatus) query += "&status=" + encodeURIComponent(state.alertStatus);
+      return query;
+    }
+
+    async function loadAlerts() {
+      const query = new URLSearchParams({ limit: "60" });
+      if (state.alertKind) query.set("kind", state.alertKind);
+      if (state.alertStatus) query.set("status", state.alertStatus);
+      try {
+        const data = await api("/api/admin/alerts?" + query.toString());
+        state.alertItems = data.items || [];
+        renderAlerts();
+      } catch (error) { toast(error.message); }
     }
 
     function renderRecentAudit() {
@@ -803,8 +857,12 @@
 
     async function openUserDetail(userId) {
       try {
-        const data = await api("/api/admin/users/" + encodeURIComponent(userId));
+        const [data, sessionData] = await Promise.all([
+          api("/api/admin/users/" + encodeURIComponent(userId)),
+          api("/api/admin/users/" + encodeURIComponent(userId) + "/sessions").catch(() => ({ items: [] })),
+        ]);
         const user = data.user || {};
+        const sessions = sessionData.items || [];
         const ledger = (user.ledger || []).length
           ? `<div class="feed">${user.ledger.map((item) => `
               <div class="feed-item">
@@ -827,6 +885,7 @@
               ["积分余额", user.credits || 0], ["念念币", user.coins || 0],
               ["人格数", user.personas || 0], ["对话轮次", user.turns || 0],
               ["记忆数", user.memories || 0], ["朋友圈", user.moments || 0], ["订单数", user.orders || 0],
+              ["双因素", user.totp_enabled ? "已开启" : "未开启"],
             ].map((row) => infoRow(row[0], row[1])).join("")}
           </div>
           <div class="field full" style="margin-top:12px"><label>管理员备注</label>
@@ -834,8 +893,55 @@
           <div class="field full"><label>标签（逗号分隔）</label>
             <input id="unTags" value="${escapeHtml(user.tags || "")}" placeholder="例如 VIP,风险" /></div>
           <div class="btnrow"><button class="btn primary wide" id="unSave">保存备注</button></div>
+          <h4 style="margin:16px 0 8px">登录会话</h4>
+          <div id="unSessionBox"></div>
+          <div class="btnrow">
+            <button class="btn ghost" id="unRevokeAll">全部下线</button>
+            <button class="btn ghost" id="unResetTotp">重置双因素</button>
+          </div>
           <h4 style="margin:16px 0 8px">最近积分流水</h4>${ledger}
         `, (body, mask) => {
+          const sessionBox = body.querySelector("#unSessionBox");
+          const renderSessions = (items) => {
+            sessionBox.innerHTML = items.length
+              ? `<div class="feed">${items.map((item) => `
+                  <div class="feed-item">
+                    <div class="feed-dot">${icon("key")}</div>
+                    <div class="feed-body">
+                      <div class="feed-title">${escapeHtml(item.ip || "未知 IP")}${item.pending_totp ? ' <span class="tag plain">待双因素</span>' : ""}</div>
+                      <div class="feed-sub">${escapeHtml(item.user_agent || "未知设备")}</div>
+                      <div class="feed-time">登录 ${fmtTime(item.created_at)} · 到期 ${fmtTime(item.expires_at)} · ${escapeHtml(item.token_prefix)}…</div>
+                    </div>
+                    <button class="btn small ghost" data-session-revoke="${escapeHtml(item.token_prefix)}">下线</button>
+                  </div>`).join("")}</div>`
+              : emptyState("暂无有效会话", "key");
+          };
+          renderSessions(sessions);
+          sessionBox.addEventListener("click", async (event) => {
+            const button = event.target.closest("[data-session-revoke]");
+            if (!button) return;
+            button.disabled = true;
+            try {
+              await api(`/api/admin/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(button.dataset.sessionRevoke)}/revoke`, { method: "POST" });
+              toast("会话已下线");
+              const refreshed = await api(`/api/admin/users/${encodeURIComponent(userId)}/sessions`);
+              renderSessions(refreshed.items || []);
+            } catch (error) { toast(error.message); button.disabled = false; }
+          });
+          body.querySelector("#unRevokeAll").onclick = async () => {
+            if (!window.confirm("确认下线该用户的全部登录会话？")) return;
+            try {
+              await api(`/api/admin/users/${encodeURIComponent(userId)}/sessions/revoke-all`, { method: "POST" });
+              toast("已全部下线"); renderSessions([]);
+            } catch (error) { toast(error.message); }
+          };
+          body.querySelector("#unResetTotp").onclick = async () => {
+            if (!window.confirm("确认重置该用户的双因素绑定？重置后需重新绑定。")) return;
+            try {
+              await api(`/api/admin/users/${encodeURIComponent(userId)}/totp/reset`, { method: "POST" });
+              toast("双因素已重置");
+            } catch (error) { toast(error.message); }
+          };
           body.querySelector("#unSave").onclick = async () => {
             const note = body.querySelector("#unNote").value;
             const tags = body.querySelector("#unTags").value;
@@ -992,8 +1098,7 @@
 
       const failed = state.tasks.filter((item) => item.status === "error" || item.status === "interrupted");
       $("taskHead").innerHTML = headIcon("refresh", "任务队列", `<span class="spacer"></span><span class="tag ${failed.length ? "open" : "plain"}">${failed.length} 个异常</span>`);
-      if (!state.tasks.length) { $("taskList").innerHTML = emptyState("暂无任务", "refresh"); return; }
-      $("taskList").innerHTML = `<div class="feed">${state.tasks.slice(0, 20).map((item) => {
+      $("taskList").innerHTML = state.tasks.length ? `<div class="feed">${state.tasks.slice(0, 20).map((item) => {
         const bad = item.status === "error" || item.status === "interrupted";
         return `<div class="feed-item">
           <div class="feed-dot" style="background:${bad ? TONE.red.soft : TONE.v.soft};color:${bad ? TONE.red.color : TONE.v.color}">${icon("refresh")}</div>
@@ -1004,7 +1109,54 @@
           </div>
           ${bad ? `<button class="btn small ghost" data-task-retry="${escapeHtml(String(item.id))}">重试</button>` : ""}
         </div>`;
-      }).join("")}</div>`;
+      }).join("")}</div>` : emptyState("暂无任务", "refresh");
+
+      renderLogs();
+    }
+
+    function renderLogs() {
+      const items = state.logItems || [];
+      $("logHead").innerHTML = headIcon("eye", "应用日志",
+        '<span class="spacer"></span>' +
+        '<select class="select small" id="logLevel">' +
+        `<option value=""${state.logLevel === "" ? " selected" : ""}>全部级别</option>` +
+        ["INFO", "WARNING", "ERROR", "CRITICAL"].map((value) =>
+          `<option value="${value}"${state.logLevel === value ? " selected" : ""}>${value}</option>`).join("") +
+        "</select>" +
+        '<input class="input small" id="logKeyword" placeholder="关键词" value="' + escapeHtml(state.logKeyword || "") + '" style="max-width:160px" />' +
+        '<button class="btn small ghost" id="logRefresh">刷新</button>');
+      $("logList").innerHTML = items.length ? `<div class="feed log-feed">${items.map((item) => {
+        const tone = item.level === "ERROR" || item.level === "CRITICAL" ? TONE.red : item.level === "WARNING" ? TONE.orange : TONE.blue;
+        return `<div class="feed-item">
+          <div class="feed-dot" style="background:${tone.soft};color:${tone.color}">${icon("eye")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.level || "INFO")} · ${escapeHtml(item.logger || "nian")}</div>
+            <div class="feed-sub">${escapeHtml(item.msg || "")}</div>
+            <div class="feed-time">${escapeHtml(item.ts || "")}</div>
+          </div>
+        </div>`;
+      }).join("")}</div>` : emptyState("暂无日志", "eye");
+      const levelSelect = $("logLevel");
+      if (levelSelect) levelSelect.onchange = () => { state.logLevel = levelSelect.value; loadLogs(); };
+      const keywordInput = $("logKeyword");
+      if (keywordInput) {
+        keywordInput.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") { state.logKeyword = keywordInput.value.trim(); loadLogs(); }
+        });
+      }
+      const refresh = $("logRefresh");
+      if (refresh) refresh.onclick = () => { state.logKeyword = ($("logKeyword") || {}).value || ""; loadLogs(); };
+    }
+
+    async function loadLogs() {
+      const query = new URLSearchParams({ limit: "200" });
+      if (state.logLevel) query.set("level", state.logLevel);
+      if (state.logKeyword) query.set("keyword", state.logKeyword);
+      try {
+        const data = await api("/api/admin/system/logs?" + query.toString());
+        state.logItems = data.items || [];
+        renderLogs();
+      } catch (error) { toast(error.message); }
     }
 
     /* ------------------------------------------------------------ admins */
@@ -1192,8 +1344,17 @@
 
     function renderRedemptionPanel() {
       const stats = state.redemptionStats || {};
+      const statusLabel = { unused: "未使用", used: "已使用", void: "已作废" };
       $("codeHead").innerHTML = headIcon("key", "兑换码",
-        '<span class="spacer"></span><span class="tag plain">未使用 ' + escapeHtml(String(stats.unused || 0)) +
+        '<span class="spacer"></span>' +
+        '<select class="select small" id="rcFilter">' +
+        `<option value=""${state.redemptionFilter === "" ? " selected" : ""}>全部状态</option>` +
+        `<option value="unused"${state.redemptionFilter === "unused" ? " selected" : ""}>未使用</option>` +
+        `<option value="used"${state.redemptionFilter === "used" ? " selected" : ""}>已使用</option>` +
+        `<option value="void"${state.redemptionFilter === "void" ? " selected" : ""}>已作废</option></select>` +
+        '<button class="btn small ghost" id="rcExport">导出 CSV</button>' +
+        '<button class="btn small ghost" id="rcBatchVoid">批量作废</button>' +
+        '<span class="tag plain">未使用 ' + escapeHtml(String(stats.unused || 0)) +
         ' · 已使用 ' + escapeHtml(String(stats.used || 0)) + "</span>");
       $("codeForm").innerHTML = `
         <div class="form-grid">
@@ -1206,17 +1367,69 @@
           <span class="state-line">兑换码是念念币的唯一发放来源</span>
         </div>`;
       const items = state.redemptionItems || [];
+      const selected = new Set(state.redemptionSelected || []);
+      const voidable = items.filter((item) => item.status === "unused").map((item) => String(item.id));
+      const allChecked = voidable.length > 0 && voidable.every((id) => selected.has(id));
       $("codeList").innerHTML = items.length ? `<div class="divider-soft"></div>
         <div class="tbl-wrap" style="margin-top:6px"><table class="atable compact">
-        <thead><tr><th>兑换码</th><th>念念币</th><th>状态</th><th>兑换用户</th><th>时间</th></tr></thead>
+        <thead><tr>
+          <th style="width:34px"><input type="checkbox" id="rcSelectAll"${allChecked ? " checked" : ""} /></th>
+          <th>兑换码</th><th>念念币</th><th>状态</th><th>兑换用户</th><th>时间</th></tr></thead>
         <tbody>${items.map((item) => `
           <tr>
+            <td data-label="选择"><input type="checkbox" data-rc-select="${item.id}"${selected.has(String(item.id)) ? " checked" : ""}${item.status === "unused" ? "" : " disabled"} /></td>
             <td data-label="兑换码"><code class="code-cell" data-copy="${escapeHtml(item.code)}">${escapeHtml(item.code)}</code></td>
             <td data-label="念念币" class="num">${escapeHtml(String(item.coins))}</td>
-            <td data-label="状态"><span class="tag ${item.status === "used" ? "plain" : "resolved"}">${item.status === "used" ? "已使用" : "未使用"}</span></td>
+            <td data-label="状态"><span class="tag ${item.status === "unused" ? "resolved" : "plain"}">${escapeHtml(statusLabel[item.status] || item.status)}</span></td>
             <td data-label="兑换用户" class="t3">${escapeHtml(item.redeemed_username || "-")}</td>
             <td data-label="时间" class="t3">${item.status === "used" ? fmtShort(item.redeemed_at) : fmtShort(item.created_at)}</td>
           </tr>`).join("")}</tbody></table></div>` : "";
+      const selectAll = $("rcSelectAll");
+      if (selectAll) selectAll.onchange = () => {
+        state.redemptionSelected = selectAll.checked ? voidable.slice() : [];
+        renderRedemptionPanel();
+      };
+      $("codeList").querySelectorAll("[data-rc-select]").forEach((node) => {
+        node.onchange = () => {
+          const id = String(node.dataset.rcSelect);
+          const current = new Set(state.redemptionSelected || []);
+          if (node.checked) current.add(id); else current.delete(id);
+          state.redemptionSelected = Array.from(current);
+        };
+      });
+      const filterSelect = $("rcFilter");
+      if (filterSelect) filterSelect.onchange = () => { state.redemptionFilter = filterSelect.value; state.redemptionSelected = []; loadRedemptionCodes(); };
+      $("rcExport").onclick = async () => {
+        const button = $("rcExport");
+        button.disabled = true;
+        try {
+          const suffix = state.redemptionFilter ? "?status=" + encodeURIComponent(state.redemptionFilter) : "";
+          await downloadCsv("/api/admin/redemption-codes/export" + suffix);
+        } catch (error) { toast(error.message); } finally { button.disabled = false; }
+      };
+      $("rcBatchVoid").onclick = () => {
+        const ids = state.redemptionSelected || [];
+        const scopeText = ids.length
+          ? `选中的 ${ids.length} 个兑换码`
+          : "当前筛选下全部未使用的兑换码";
+        openModal("批量作废", `<div class="sub">确认作废 ${escapeHtml(scopeText)}？已使用或已作废的兑换码会自动跳过。</div>
+          <div class="btnrow"><button class="btn primary" id="rcVoidOk" style="flex:1">确认作废</button></div>`, (body, mask) => {
+          body.querySelector("#rcVoidOk").onclick = async () => {
+            try {
+              const result = await api("/api/admin/redemption-codes/batch-void", {
+                method: "POST",
+                body: JSON.stringify(ids.length
+                  ? { ids: ids.map(Number) }
+                  : { all_matching: true, status: "unused" }),
+              });
+              closeModal(mask);
+              toast(`已作废 ${result.voided || 0} 个，跳过 ${result.skipped || 0} 个`);
+              state.redemptionSelected = [];
+              await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+      };
       $("rcCreate").onclick = async () => {
         const button = $("rcCreate");
         if (button.disabled) return;
@@ -1240,6 +1453,16 @@
           catch (error) { toast("复制失败"); }
         };
       });
+    }
+
+    async function loadRedemptionCodes() {
+      const suffix = state.redemptionFilter ? "?limit=200&status=" + encodeURIComponent(state.redemptionFilter) : "?limit=200";
+      try {
+        const data = await api("/api/admin/redemption-codes" + suffix);
+        state.redemptionItems = data.items || [];
+        state.redemptionStats = data.stats || state.redemptionStats;
+        renderRedemptionPanel();
+      } catch (error) { toast(error.message); }
     }
 
     async function savePackage(packageId) {
@@ -1344,7 +1567,7 @@
       $("refreshBtn").disabled = true;
       try {
         const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery, orders, dashboard,
-          personas, moments, announcements, admins, flags, bindings, backups, tasks, locked] = await Promise.all([
+          personas, moments, announcements, admins, flags, bindings, backups, tasks, locked, alertsData] = await Promise.all([
           api("/api/admin/summary"), api("/api/admin/users?size=100"), api("/api/admin/reports"),
           api("/api/admin/audit"), api("/api/metrics"), api("/health"),
           api("/api/admin/platform"), api("/api/admin/credits"),
@@ -1354,7 +1577,7 @@
           api("/api/admin/announcements"), api("/api/admin/admins"),
           api("/api/admin/system/flags"), api("/api/admin/system/bindings"),
           api("/api/admin/system/backups"), api("/api/admin/system/tasks?limit=200"),
-          api("/api/admin/security/locked"),
+          api("/api/admin/security/locked"), api("/api/admin/alerts?limit=60" + alertQuery()),
         ]);
         state.summary = summary; state.users = users.items || []; state.reports = reports.items || [];
         state.audit = audit.items || []; state.metrics = metrics; state.health = health;
@@ -1370,6 +1593,7 @@
         state.flags = flags.flags || {}; state.bindings = bindings.items || [];
         state.backups = backups.items || []; state.tasks = tasks.items || [];
         state.locked = locked.items || [];
+        state.alertItems = alertsData.items || [];
         state.online = true;
         renderOverview(); renderReports(); renderUsers(); renderContent(); renderOrders(); renderOps();
         renderAudit(); renderSystem(); renderSystemExtras(); renderCreditsPanel(); renderAdmins(); renderSecurity();
@@ -1468,6 +1692,24 @@
         const name = tabButton.dataset.tab;
         if (location.hash !== "#" + name) history.replaceState(null, "", "#" + name);
         setSection(name);
+        return;
+      }
+      const alertReadButton = event.target.closest("[data-alert-read]");
+      if (alertReadButton) {
+        alertReadButton.disabled = true;
+        try {
+          await api(`/api/admin/alerts/${alertReadButton.dataset.alertRead}/read`, { method: "POST" });
+          toast("已标记为已读");
+          await loadAlerts();
+        } catch (error) { toast(error.message); alertReadButton.disabled = false; }
+        return;
+      }
+      const alertJump = event.target.closest("[data-alert-jump]");
+      if (alertJump) {
+        const target = alertTarget(alertJump.dataset.alertJump);
+        const value = String(alertJump.dataset.alertJump || "");
+        if (target && target.tab === "users") { setSection("users"); openUserDetail(value.slice(5)); }
+        else if (target) { setSection(target.tab); }
         return;
       }
       const filterButton = event.target.closest("#reportFilter button");

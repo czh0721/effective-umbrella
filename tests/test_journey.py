@@ -418,7 +418,9 @@ class AdminAlertCooldownTest(unittest.TestCase):
             "add_admin_alert": store.add_admin_alert,
         }
         store.list_admins = lambda: [{"id": 1, "status": "active"}]
-        store.add_admin_alert = lambda admin_id, kind, message: self.records.append((admin_id, kind, message))
+        store.add_admin_alert = lambda admin_id, kind, message, target="": self.records.append(
+            (admin_id, kind, message)
+        )
         webapp_module._admin_alert_at.clear()
 
     def tearDown(self):

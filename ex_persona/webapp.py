@@ -675,7 +675,9 @@ def current_user(request: Request) -> dict:
 
 
 def _login_response(user: dict, request: Request | None = None, *, pending_totp: bool = False) -> JSONResponse:
-    token = accounts.start_session(user["id"], pending_totp=pending_totp)
+    ip = _client_ip(request) if request else ""
+    agent = (request.headers.get("user-agent", "") if request else "")[:300]
+    token = accounts.start_session(user["id"], pending_totp=pending_totp, ip=ip, user_agent=agent)
     body = {"ok": True, "totp_required": True} if pending_totp else {"ok": True, "user": _public_user(user)}
     response = JSONResponse(body)
     response.set_cookie(
@@ -924,7 +926,9 @@ _admin_alert_at: dict[str, float] = {}
 _admin_alert_lock = threading.Lock()
 
 
-def _notify_admins(kind: str, message: str, *, cooldown: int = ADMIN_ALERT_COOLDOWN_SECONDS) -> None:
+def _notify_admins(
+    kind: str, message: str, *, target: str = "", cooldown: int = ADMIN_ALERT_COOLDOWN_SECONDS
+) -> None:
     """给所有启用中的管理员写站内告警；同类告警在冷却期内只记一次。"""
     now = time.time()
     with _admin_alert_lock:
@@ -935,7 +939,7 @@ def _notify_admins(kind: str, message: str, *, cooldown: int = ADMIN_ALERT_COOLD
         if (row.get("status") or "active") != "active":
             continue
         try:
-            store.add_admin_alert(row["id"], kind, message)
+            store.add_admin_alert(row["id"], kind, message, target=target)
         except Exception:  # noqa: BLE001 - 告警失败不影响主流程
             log.exception("admin alert failed", extra={"event": "alert.admin_error"})
 
@@ -1087,7 +1091,7 @@ def _on_outbox_fail(row: dict, error: str) -> None:
     if not _safety(settings).get("offline_alert", True):
         return
     _notify(user_id, "send_failed", "有消息多次发送失败，微信可能已掉线，请重新扫码登录。")
-    _notify_admins("send_failed", f"用户 #{user_id} 的出站消息多次发送失败，微信可能已掉线。")
+    _notify_admins("send_failed", f"用户 #{user_id} 的出站消息多次发送失败，微信可能已掉线。", target=f"user:{user_id}")
 
 
 _outbox = outbox.OutboxWorker(_outbox_send, on_fail=_on_outbox_fail)
@@ -1343,6 +1347,12 @@ class RedemptionCodeRequest(BaseModel):
     coins: int
     batch: str | None = None
     note: str | None = None
+
+
+class BatchVoidRequest(BaseModel):
+    ids: list[int] = []
+    status: str = ""
+    all_matching: bool = False
 
 
 class PackageRequest(BaseModel):
@@ -3334,7 +3344,7 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
     if settings["safety"].get("crisis_support", True) and safety.detect_crisis(message):
         observability.METRICS.inc("reply.crisis")
         _notify(user_id, "crisis", "有用户表达了自伤/极端情绪，请及时关注并联系专业帮助。")
-        _notify_admins("crisis", f"用户 #{user_id} 触发了情感安全兜底，请及时关注。")
+        _notify_admins("crisis", f"用户 #{user_id} 触发了情感安全兜底，请及时关注。", target=f"user:{user_id}")
         return _completion(request, safety.crisis_reply(persona["name"]))
 
     # 收到图片时的占位文本：未开启回应则直接静默，不调用大模型。
@@ -3378,7 +3388,7 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
     except (FileNotFoundError, ValueError):
         observability.METRICS.inc("reply.agent_missing")
         _notify(user_id, "persona", "分身数据缺失，暂时无法回复，请重新蒸馏人格。")
-        _notify_admins("persona", f"用户 #{user_id} 的分身数据缺失，无法回复，需要重新蒸馏。")
+        _notify_admins("persona", f"用户 #{user_id} 的分身数据缺失，无法回复，需要重新蒸馏。", target=f"user:{user_id}")
         return _completion(request, REPLY_UNAVAILABLE)
     if not agent.config.ready:
         # 直接以正常回复告知用户，避免非 200 让 weclaw 静默丢弃；同时提醒运营者。
@@ -3476,7 +3486,7 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
                         else "模型服务暂时不可用"
                     )
                     _notify(user_id, "llm", f"{detail}，分身暂时无法回复。")
-                    _notify_admins("llm", f"用户 #{user_id} 的模型调用失败：{detail}。")
+                    _notify_admins("llm", f"用户 #{user_id} 的模型调用失败：{detail}。", target=f"user:{user_id}")
                     # 以正常回复返回，避免 non-200 被 weclaw 静默丢弃；扣费已在上方退回。
                     return _completion(request, REPLY_MODEL_ERROR)
                 # 只有真正用自带 Key 调模型时才更新它的状态；走平台内置模型时
@@ -3616,7 +3626,7 @@ def create_report(payload: ReportRequest, user: dict = Depends(current_user)) ->
         extra={"event": "report.create", "user_id": user["id"], "report_id": report.get("id")},
     )
     # 每条举报都不同，不做同类冷却。
-    _notify_admins("report", f"新的举报 #{report.get('id')}：{category}", cooldown=0)
+    _notify_admins("report", f"新的举报 #{report.get('id')}：{category}", target=f"report:{report.get('id')}", cooldown=0)
     return {"ok": True, "id": report.get("id")}
 
 
@@ -4268,16 +4278,94 @@ def admin_audit_export(
 
 
 @app.get("/api/admin/alerts")
-def admin_alerts(admin: dict = Depends(current_admin)) -> dict:
+def admin_alerts(
+    kind: str = "", status: str = "", limit: int = 60, admin: dict = Depends(current_admin)
+) -> dict:
     return {
-        "items": store.list_admin_alerts(admin["id"], limit=60),
+        "items": store.list_admin_alerts(admin["id"], limit=limit, kind=kind, status=status),
         "unread": store.count_unread_admin_alerts(admin["id"]),
     }
+
+
+@app.post("/api/admin/alerts/{alert_id}/read")
+def admin_alert_read(alert_id: int, admin: dict = Depends(current_admin)) -> dict:
+    if not store.mark_admin_alert_read(admin["id"], alert_id):
+        raise HTTPException(status_code=404, detail="告警不存在或已读")
+    return {"ok": True}
 
 
 @app.post("/api/admin/alerts/read")
 def admin_alerts_read(admin: dict = Depends(current_admin)) -> dict:
     store.mark_admin_alerts_read(admin["id"])
+    return {"ok": True}
+
+
+@app.get("/api/admin/system/logs")
+def admin_system_logs(
+    level: str = "", keyword: str = "", limit: int = 200, admin: dict = Depends(current_admin)
+) -> dict:
+    """只读查看本地滚动日志尾部。"""
+    items = observability.read_log_tail(level=level, keyword=keyword, limit=limit)
+    return {"items": items, "count": len(items), "file": observability.log_file_path().name}
+
+
+@app.get("/api/admin/users/{user_id}/sessions")
+def admin_user_sessions(user_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """查看指定用户当前有效会话（仅暴露 token 前缀）。"""
+    target = store.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"items": store.list_user_sessions(user_id)}
+
+
+@app.post("/api/admin/users/{user_id}/sessions/{prefix}/revoke")
+def admin_revoke_user_session(
+    user_id: int, prefix: str, admin: dict = Depends(current_admin)
+) -> dict:
+    target = store.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if not store.revoke_user_session(user_id, prefix):
+        raise HTTPException(status_code=404, detail="会话不存在或已失效")
+    _audit(
+        admin,
+        "security.session_revoke",
+        target=str(user_id),
+        detail=f"username={target.get('username')} prefix={prefix}",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{user_id}/sessions/revoke-all")
+def admin_revoke_user_sessions(user_id: int, admin: dict = Depends(current_admin)) -> dict:
+    target = store.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    store.delete_user_sessions(user_id)
+    _audit(
+        admin,
+        "security.session_revoke",
+        target=str(user_id),
+        detail=f"username={target.get('username')} scope=all",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{user_id}/totp/reset")
+def admin_reset_user_totp(user_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """重置用户的双因素绑定，使其下次登录不再要求动态验证码。"""
+    target = store.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if not target.get("totp_enabled") and not target.get("totp_secret"):
+        raise HTTPException(status_code=400, detail="该用户未开启双因素")
+    store.set_user_totp(user_id, "", False)
+    _audit(
+        admin,
+        "security.reset_totp",
+        target=str(user_id),
+        detail=f"username={target.get('username')}",
+    )
     return {"ok": True}
 
 
@@ -4471,6 +4559,48 @@ def admin_create_redemption_codes(
     )
     _audit(admin, "redemption.create", detail=f"count={len(created)} coins={coins}")
     return {"ok": True, "items": created, "stats": store.redemption_stats()}
+
+
+@app.get("/api/admin/redemption-codes/export")
+def admin_redemption_codes_export(status: str = "", admin: dict = Depends(current_admin)) -> Response:
+    """导出兑换码 CSV（全量，UTF-8 BOM）。"""
+    rows = store.export_redemption_codes(status=status)
+    header = ["兑换码", "念念币", "状态", "批次", "备注", "兑换用户", "创建时间", "兑换时间"]
+    data = [
+        [
+            row.get("code"),
+            row.get("coins"),
+            row.get("status"),
+            row.get("batch"),
+            row.get("note"),
+            row.get("redeemed_username") or "",
+            row.get("created_at"),
+            row.get("redeemed_at") or "",
+        ]
+        for row in rows
+    ]
+    return _csv_response("redemption_codes.csv", header, data)
+
+
+@app.post("/api/admin/redemption-codes/batch-void")
+def admin_batch_void_redemption_codes(
+    payload: BatchVoidRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    """批量作废兑换码；已兑换或已作废的自动跳过。"""
+    ids = [int(value) for value in (payload.ids or [])]
+    if not payload.all_matching and not ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个兑换码")
+    result = store.batch_void_redemption_codes(
+        ids=ids, status=(payload.status or "").strip(), all_matching=bool(payload.all_matching)
+    )
+    _audit(
+        admin,
+        "redemption.batch_void",
+        target=("filter" if payload.all_matching else ",".join(str(v) for v in ids)),
+        detail=f"all_matching={bool(payload.all_matching)} status={payload.status or 'all'}"
+        f" voided={result['voided']} skipped={result['skipped']}",
+    )
+    return {"ok": True, **result, "stats": store.redemption_stats()}
 
 
 @app.post("/api/admin/users/{user_id}/credits")

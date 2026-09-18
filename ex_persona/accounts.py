@@ -174,9 +174,13 @@ def authenticate(username: str, password: str) -> dict:
     return user
 
 
-def start_session(user_id: int, days: int = 7, pending_totp: bool = False) -> str:
+def start_session(
+    user_id: int, days: int = 7, pending_totp: bool = False, ip: str = "", user_agent: str = ""
+) -> str:
     token = secrets.token_urlsafe(32)
-    store.create_session(user_id, token, days=days, pending_totp=pending_totp)
+    store.create_session(
+        user_id, token, days=days, pending_totp=pending_totp, ip=ip, user_agent=user_agent
+    )
     return token
 
 

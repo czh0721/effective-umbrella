@@ -437,7 +437,52 @@ def main():
     check("导出 zip 200", export.status_code == 200 and export.headers.get("content-type", "").startswith("application/zip"),
           f"status={export.status_code} bytes={len(export.content)}")
 
-    # 19. 管理员强制双因素：开启后未绑定管理员只能走绑定流程
+    # 19. 后台运维增强：会话 / 日志 / 告警 / 兑换码导出与批量作废
+    sessions = client.get(f"/api/admin/users/{user_id}/sessions")
+    check("用户会话列表 200",
+          sessions.status_code == 200 and all("token_prefix" in i for i in sessions.json().get("items", [])),
+          sessions.text[:120])
+    revoke_all = client.post(f"/api/admin/users/{user_id}/sessions/revoke-all")
+    check("全部下线 200", revoke_all.status_code == 200, revoke_all.text[:120])
+    after_revoke = client.get(f"/api/admin/users/{user_id}/sessions")
+    check("下线后会话清空", after_revoke.json().get("items") == [], after_revoke.text[:120])
+
+    store.set_user_totp(user_id, "E2ESECRETE2ESECRET", True)
+    reset_totp = client.post(f"/api/admin/users/{user_id}/totp/reset")
+    check("重置双因素 200",
+          reset_totp.status_code == 200 and not store.get_user(user_id).get("totp_enabled"),
+          reset_totp.text[:120])
+
+    logs = client.get("/api/admin/system/logs", params={"limit": 50})
+    check("应用日志 200", logs.status_code == 200 and isinstance(logs.json().get("items"), list),
+          logs.text[:120])
+    logs_error = client.get("/api/admin/system/logs", params={"level": "ERROR"})
+    check("日志级别筛选 200", logs_error.status_code == 200, logs_error.text[:120])
+
+    alerts = client.get("/api/admin/alerts", params={"limit": 20})
+    check("告警中心 200", alerts.status_code == 200 and "items" in alerts.json(), alerts.text[:120])
+    alert_items = alerts.json().get("items") or []
+    if alert_items:
+        mark = client.post(f"/api/admin/alerts/{alert_items[0]['id']}/read")
+        check("告警逐条已读 200", mark.status_code in (200, 404), mark.text[:120])
+    else:
+        check("告警逐条已读 200", True, "无告警，跳过")
+
+    codes_export = client.get("/api/admin/redemption-codes/export")
+    check("兑换码导出 CSV 200",
+          codes_export.status_code == 200 and codes_export.content.startswith(b"\xef\xbb\xbf"),
+          f"status={codes_export.status_code}")
+    void_targets = client.post("/api/admin/redemption-codes",
+                               json={"count": 2, "coins": 5, "batch": "e2e-void"}).json()["items"]
+    batch_void = client.post("/api/admin/redemption-codes/batch-void",
+                             json={"ids": [i["id"] for i in void_targets]})
+    check("批量作废 200 且命中",
+          batch_void.status_code == 200 and batch_void.json().get("voided") == 2,
+          batch_void.text[:120])
+    empty_void = client.post("/api/admin/redemption-codes/batch-void", json={})
+    check("空选择批量作废 400", empty_void.status_code == 400, empty_void.text[:120])
+
+    # 20. 管理员强制双因素：开启后未绑定管理员只能走绑定流程
     force_on = client.put("/api/admin/system/flags/admin_force_totp", json={"value": True})
     check("开启强制双因素", force_on.status_code == 200, force_on.text[:120])
     with TestClient(webapp_module.app) as f_client:

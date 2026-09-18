@@ -6,8 +6,12 @@
 
 import json
 import logging
+import os
 import threading
 import time
+from collections.abc import Iterator
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 _EXTRA_KEYS = (
     "event",
@@ -40,15 +44,90 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+LOG_DIR_NAME = "logs"
+LOG_FILE_NAME = "nian.log"
+
+
+def log_dir() -> Path:
+    return Path(os.getenv("PERSONA_DATA_DIR", "data")).expanduser() / LOG_DIR_NAME
+
+
+def log_file_path() -> Path:
+    return log_dir() / LOG_FILE_NAME
+
+
 def setup_logging(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     if getattr(root, "_nian_json", False):
         return
+    formatter = JsonFormatter()
     handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
+    handler.setFormatter(formatter)
     root.addHandler(handler)
+    try:
+        log_dir().mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            log_file_path(), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+    except OSError:  # 目录不可写时仍保留 stdout 日志
+        pass
     root.setLevel(level)
     root._nian_json = True  # type: ignore[attr-defined]
+
+
+_LEVEL_ORDER = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50,
+}
+
+
+def _iter_log_lines() -> Iterator[tuple[str, str]]:
+    path = log_file_path()
+    if not path.exists():
+        return
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                text = line.rstrip("\n")
+                if text:
+                    yield path.name, text
+    except OSError:
+        return
+
+
+def read_log_tail(level: str = "", keyword: str = "", limit: int = 200) -> list[dict]:
+    """读取本地滚动日志尾部，支持最低级别与关键词过滤。"""
+    threshold = _LEVEL_ORDER.get((level or "").upper(), 0)
+    needle = (keyword or "").strip().lower()
+    size = max(1, min(int(limit), 1000))
+    collected: list[dict] = []
+    for source, line in _iter_log_lines():
+        try:
+            payload = json.loads(line)
+        except ValueError:
+            payload = {"msg": line}
+        line_level = str(payload.get("level") or "").upper()
+        if threshold and _LEVEL_ORDER.get(line_level, 0) < threshold:
+            continue
+        if needle and needle not in line.lower():
+            continue
+        collected.append(
+            {
+                "ts": payload.get("ts", ""),
+                "level": line_level or "INFO",
+                "logger": payload.get("logger", ""),
+                "msg": payload.get("msg", ""),
+                "source": source,
+            }
+        )
+    collected.reverse()
+    return collected[:size]
+
 
 
 def log_event(logger: logging.Logger, msg: str, level: int = logging.INFO, **fields) -> None:
