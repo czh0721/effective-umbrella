@@ -99,14 +99,11 @@ class RecoveryRequestTest(unittest.TestCase):
             )
             self.assertEqual(known.status_code, 200, known.text)
 
-        salt, digest = accounts.hash_password("password123")
         admin_name = f"adm-{uuid.uuid4().hex[:8]}"
-        store.create_user(
-            username=admin_name, password_hash=digest, password_salt=salt, role="admin"
-        )
+        accounts.create_admin(admin_name, "password123")
         with TestClient(app) as client:
             login = client.post(
-                "/api/auth/login", json={"username": admin_name, "password": "password123"}
+                "/api/admin/auth/login", json={"username": admin_name, "password": "password123"}
             )
             self.assertEqual(login.status_code, 200, login.text)
             listing = client.get("/api/admin/recovery")

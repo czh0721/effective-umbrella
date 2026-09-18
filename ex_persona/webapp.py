@@ -53,6 +53,7 @@ log = logging.getLogger("nian.webapp")
 ROOT = Path(__file__).resolve().parent.parent
 WEB_DIR = ROOT / "web"
 SESSION_COOKIE = "persona_session"
+ADMIN_SESSION_COOKIE = "persona_admin_session"
 PORT = int(os.getenv("PERSONA_PORT", os.getenv("PORT", "8000")))
 MAX_FILES = 20
 MAX_FILE_BYTES = 50 * 1024 * 1024
@@ -622,7 +623,8 @@ def _startup() -> None:
     store.reconcile_distill_tickets()
     store.purge_expired_sessions()
     store.purge_expired_login_states()
-    _apply_admin_whitelist()
+    store.purge_expired_admin_sessions()
+    _bootstrap_admin_from_env()
     get_scheduler().start()
     get_moments_scheduler().start()
     get_credit_worker().start()
@@ -695,6 +697,65 @@ def _page(file_name: str):
         return FileResponse(WEB_DIR / file_name)
 
     return handler
+
+
+def _public_admin(admin: dict) -> dict:
+    return {
+        "id": admin["id"],
+        "username": admin.get("username"),
+        "name": admin.get("name") or admin.get("username"),
+        "totp_enabled": bool(admin.get("totp_enabled")),
+        "created_at": admin.get("created_at"),
+        "last_login_at": admin.get("last_login_at"),
+    }
+
+
+def current_admin(request: Request) -> dict:
+    """管理员会话依赖：使用独立的 cookie 与存储，与用户会话互不影响。"""
+    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if admin is None:
+        raise HTTPException(status_code=401, detail="请先登录管理员账号")
+    return admin
+
+
+def _admin_login_response(
+    admin: dict, request: Request | None = None, *, pending_totp: bool = False
+) -> JSONResponse:
+    token = accounts.start_admin_session(admin["id"], pending_totp=pending_totp)
+    body = (
+        {"ok": True, "totp_required": True}
+        if pending_totp
+        else {"ok": True, "admin": _public_admin(admin)}
+    )
+    response = JSONResponse(body)
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        token,
+        max_age=7 * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=_secure_cookie(request),
+        path="/",
+    )
+    return response
+
+
+def _bootstrap_admin_from_env() -> None:
+    """部署引导：仅当设置了用户名与密码且该管理员不存在时创建首个管理员。"""
+    username = (os.getenv("PERSONA_ADMIN_USERNAME") or "").strip()
+    password = os.getenv("PERSONA_ADMIN_PASSWORD") or ""
+    if not username or not password:
+        return
+    if store.get_admin_by_username(username) is not None:
+        return
+    try:
+        accounts.create_admin(username, password)
+        log.info("admin bootstrapped", extra={"event": "admin.bootstrap", "username": username})
+    except accounts.AccountError as error:
+        log.warning(
+            "admin bootstrap skipped",
+            extra={"event": "admin.bootstrap_error", "detail": error.message},
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -822,31 +883,11 @@ def _require_persona(user_id: int, persona_id: int | None = None) -> dict:
     return persona
 
 
-def _require_admin(user: dict) -> None:
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="仅管理员可访问")
-
-
 def _ensure_persona_quota(user_id: int) -> None:
     if store.count_personas_for_user(user_id) >= MAX_PERSONAS_PER_USER:
         raise HTTPException(
             status_code=400, detail=f"最多创建 {MAX_PERSONAS_PER_USER} 个 Agent"
         )
-
-
-def _admin_usernames() -> set[str]:
-    raw = os.getenv("PERSONA_ADMIN_USERS") or ""
-    return {part.strip().lower() for part in raw.split(",") if part.strip()}
-
-
-def _apply_admin_whitelist() -> None:
-    """把白名单里的用户名提升为管理员，方便部署方开通后台。"""
-    names = _admin_usernames()
-    if not names:
-        return
-    for row in store.list_users():
-        if (row.get("username") or "").lower() in names and (row.get("role") or "user") != "admin":
-            store.set_user_role(row["id"], "admin")
 
 
 # 运营告警的冷却时间与记录，避免同一故障在每个请求里反复刷屏。
@@ -856,18 +897,19 @@ _admin_alert_lock = threading.Lock()
 
 
 def _notify_admins(kind: str, message: str, *, cooldown: int = ADMIN_ALERT_COOLDOWN_SECONDS) -> None:
-    """给所有管理员写站内告警；同类告警在冷却期内只记一次。"""
+    """给所有启用中的管理员写站内告警；同类告警在冷却期内只记一次。"""
     now = time.time()
     with _admin_alert_lock:
         if now - _admin_alert_at.get(kind, 0.0) < cooldown:
             return
         _admin_alert_at[kind] = now
-    for row in store.list_users():
-        if (row.get("role") or "user") == "admin":
-            try:
-                store.add_alert(row["id"], kind, message)
-            except Exception:  # noqa: BLE001 - 告警失败不影响主流程
-                log.exception("admin alert failed", extra={"event": "alert.admin_error"})
+    for row in store.list_admins():
+        if (row.get("status") or "active") != "active":
+            continue
+        try:
+            store.add_admin_alert(row["id"], kind, message)
+        except Exception:  # noqa: BLE001 - 告警失败不影响主流程
+            log.exception("admin alert failed", extra={"event": "alert.admin_error"})
 
 
 def _audit(actor: dict, action: str, target: str = "", detail: str = "") -> None:
@@ -1298,18 +1340,16 @@ def service_worker():
 
 @app.get("/admin")
 def admin_page(request: Request):
-    user = accounts.session_user(request.cookies.get(SESSION_COOKIE))
-    if user is None:
+    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if admin is None:
         return RedirectResponse("/admin/login", status_code=302)
-    if user.get("role") != "admin":
-        return RedirectResponse("/app", status_code=302)
     return FileResponse(WEB_DIR / "admin.html")
 
 
 @app.get("/admin/login")
 def admin_login_page(request: Request):
-    user = accounts.session_user(request.cookies.get(SESSION_COOKIE))
-    if user is not None and user.get("role") == "admin":
+    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    if admin is not None:
         return RedirectResponse("/admin", status_code=302)
     return FileResponse(WEB_DIR / "admin_login.html")
 
@@ -3408,9 +3448,7 @@ def health() -> dict:
 
 
 @app.get("/api/metrics")
-def metrics(user: dict = Depends(current_user)) -> dict:
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="仅管理员可查看指标")
+def metrics(admin: dict = Depends(current_admin)) -> dict:
     data = observability.snapshot()
     data["outbox"] = store.outbox_stats()
     return data
@@ -3447,9 +3485,70 @@ def create_report(payload: ReportRequest, user: dict = Depends(current_user)) ->
     return {"ok": True, "id": report.get("id")}
 
 
+# --------------------------------------------------------------------------- #
+# 管理员登录（独立于用户账号）
+# --------------------------------------------------------------------------- #
+
+@app.post("/api/admin/auth/login")
+def admin_login(payload: Credentials, request: Request) -> JSONResponse:
+    ip_key = f"ip:{_client_ip(request)}"
+    user_key = f"admin:{(payload.username or '').strip().lower()}"
+    if _auth_blocked(ip_key, user_key):
+        raise HTTPException(
+            status_code=429,
+            detail="尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(AUTH_WINDOW_SECONDS)},
+        )
+    try:
+        admin = accounts.authenticate_admin(payload.username, payload.password)
+    except accounts.AccountError as error:
+        _auth_note(ip_key, user_key)
+        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+    _auth_clear(ip_key, user_key)
+    if admin.get("totp_enabled"):
+        return _admin_login_response(admin, request, pending_totp=True)
+    store.touch_admin_login(admin["id"])
+    return _admin_login_response(admin, request)
+
+
+@app.post("/api/admin/auth/2fa")
+def admin_login_2fa(payload: TotpCode, request: Request) -> JSONResponse:
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    admin = accounts.admin_session(token, allow_pending=True)
+    if admin is None or not admin.get("totp_pending"):
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    ip_key = f"ip:{_client_ip(request)}"
+    user_key = f"admin2fa:{(admin.get('username') or '').lower()}"
+    if _auth_blocked(ip_key, user_key):
+        raise HTTPException(
+            status_code=429,
+            detail="验证码尝试过于频繁，请稍后再试",
+            headers={"Retry-After": str(AUTH_WINDOW_SECONDS)},
+        )
+    if not accounts.verify_totp(admin.get("totp_secret") or "", payload.code):
+        _auth_note(ip_key, user_key)
+        raise HTTPException(status_code=401, detail="验证码不正确")
+    _auth_clear(ip_key, user_key)
+    store.mark_admin_session_verified(token)
+    store.touch_admin_login(admin["id"])
+    return JSONResponse({"ok": True, "admin": _public_admin(admin)})
+
+
+@app.post("/api/admin/auth/logout")
+def admin_logout(request: Request) -> JSONResponse:
+    accounts.end_admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
+    return response
+
+
+@app.get("/api/admin/me")
+def admin_me(admin: dict = Depends(current_admin)) -> dict:
+    return {"admin": _public_admin(admin)}
+
+
 @app.get("/api/admin/summary")
-def admin_summary(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_summary(admin: dict = Depends(current_admin)) -> dict:
     return {
         "users": store.count_users(),
         "personas": store.count_personas(),
@@ -3461,21 +3560,19 @@ def admin_summary(user: dict = Depends(current_user)) -> dict:
         "coins": store.coins_totals(),
         "redemption": store.redemption_stats(),
         "insights": store.admin_insights(),
-        "alerts_unread": store.count_unread_alerts(user["id"]),
-        "alerts": store.list_alerts(user["id"], limit=30, unread_only=True),
+        "alerts_unread": store.count_unread_admin_alerts(admin["id"]),
+        "alerts": store.list_admin_alerts(admin["id"], limit=30, unread_only=True),
     }
 
 
 @app.get("/api/admin/users")
-def admin_users(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_users(admin: dict = Depends(current_admin)) -> dict:
     rows = store.list_users()
     return {
         "items": [
             {
                 "id": row["id"],
                 "username": row["username"],
-                "role": row.get("role") or "user",
                 "status": row.get("status") or "active",
                 "created_at": row.get("created_at"),
                 "personas": store.count_personas_for_user(row["id"]),
@@ -3488,44 +3585,38 @@ def admin_users(user: dict = Depends(current_user)) -> dict:
 
 
 @app.get("/api/admin/reports")
-def admin_reports(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_reports(admin: dict = Depends(current_admin)) -> dict:
     return {"items": store.list_reports(limit=100)}
 
 
 @app.post("/api/admin/reports/{report_id}/resolve")
-def admin_resolve_report(report_id: int, user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_resolve_report(report_id: int, admin: dict = Depends(current_admin)) -> dict:
     store.set_report_status(report_id, "resolved")
-    _audit(user, "report.resolve", target=str(report_id))
+    _audit(admin, "report.resolve", target=str(report_id))
     return {"ok": True}
 
 
 @app.get("/api/admin/audit")
-def admin_audit(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_audit(admin: dict = Depends(current_admin)) -> dict:
     return {"items": store.list_audit(limit=100)}
 
 
 @app.get("/api/admin/alerts")
-def admin_alerts(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_alerts(admin: dict = Depends(current_admin)) -> dict:
     return {
-        "items": store.list_alerts(user["id"], limit=60),
-        "unread": store.count_unread_alerts(user["id"]),
+        "items": store.list_admin_alerts(admin["id"], limit=60),
+        "unread": store.count_unread_admin_alerts(admin["id"]),
     }
 
 
 @app.post("/api/admin/alerts/read")
-def admin_alerts_read(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
-    store.mark_alerts_read(user["id"])
+def admin_alerts_read(admin: dict = Depends(current_admin)) -> dict:
+    store.mark_admin_alerts_read(admin["id"])
     return {"ok": True}
 
 
 @app.get("/api/admin/recovery")
-def admin_recovery(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_recovery(admin: dict = Depends(current_admin)) -> dict:
     items = store.list_recovery_requests("open")
     for item in items:
         uid = item.get("user_id")
@@ -3534,69 +3625,26 @@ def admin_recovery(user: dict = Depends(current_user)) -> dict:
 
 
 @app.post("/api/admin/recovery/{request_id}/resolve")
-def admin_resolve_recovery(request_id: int, user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_resolve_recovery(request_id: int, admin: dict = Depends(current_admin)) -> dict:
     store.set_recovery_status(request_id, "done")
-    _audit(user, "recovery.resolve", target=str(request_id), detail="处理找回密码申请")
-    return {"ok": True}
-
-
-@app.post("/api/admin/users/{user_id}/role")
-def admin_set_role(user_id: int, payload: RoleChange, user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
-    role = (payload.role or "").strip().lower()
-    if role not in {"user", "admin"}:
-        raise HTTPException(status_code=400, detail="角色只能是 user 或 admin")
-    target = store.get_user(user_id)
-    if target is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
-    if user_id == user["id"] and role != "admin":
-        raise HTTPException(status_code=400, detail="不能取消自己的管理员权限")
-    if role == "user" and (target.get("role") or "user") == "admin":
-        remaining = [
-            row
-            for row in store.list_users()
-            if (row.get("role") or "user") == "admin" and row["id"] != user_id
-        ]
-        if not remaining:
-            raise HTTPException(status_code=400, detail="至少保留一名管理员")
-    store.set_user_role(user_id, role)
-    _audit(
-        user,
-        "user.set_role",
-        target=str(user_id),
-        detail=f"username={target.get('username')} role={role}",
-    )
+    _audit(admin, "recovery.resolve", target=str(request_id), detail="处理找回密码申请")
     return {"ok": True}
 
 
 @app.post("/api/admin/users/{user_id}/status")
 def admin_set_status(
-    user_id: int, payload: StatusChange, user: dict = Depends(current_user)
+    user_id: int, payload: StatusChange, admin: dict = Depends(current_admin)
 ) -> dict:
     """启用/停用账号。停用会注销其全部会话并停止人格对外回复，数据与账本保留。"""
-    _require_admin(user)
     status = (payload.status or "").strip().lower()
     if status not in {"active", "disabled"}:
         raise HTTPException(status_code=400, detail="状态只能是 active 或 disabled")
     target = store.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
-    if int(user_id) == int(user["id"]) and status != "active":
-        raise HTTPException(status_code=400, detail="不能停用自己的账号")
-    if status != "active" and (target.get("role") or "user") == "admin":
-        remaining = [
-            row
-            for row in store.list_users()
-            if (row.get("role") or "user") == "admin"
-            and int(row["id"]) != int(user_id)
-            and (row.get("status") or "active") == "active"
-        ]
-        if not remaining:
-            raise HTTPException(status_code=400, detail="至少保留一名启用中的管理员")
     store.set_user_status(user_id, status)
     _audit(
-        user,
+        admin,
         "user.set_status",
         target=str(user_id),
         detail=f"username={target.get('username')} status={status}",
@@ -3606,28 +3654,23 @@ def admin_set_status(
 
 @app.post("/api/admin/users/{user_id}/password")
 def admin_reset_password(
-    user_id: int, payload: AdminPasswordReset, user: dict = Depends(current_user)
+    user_id: int, payload: AdminPasswordReset, admin: dict = Depends(current_admin)
 ) -> dict:
-    _require_admin(user)
     target = store.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
-    # 禁止管理员重置其他管理员账号，避免单一管理员失陷后横向接管全部后台账号。
-    if (target.get("role") or "user") == "admin" and int(user_id) != int(user["id"]):
-        raise HTTPException(status_code=403, detail="不能重置其他管理员的密码")
     username = target.get("username") or f"user{user_id}"
     try:
         accounts.set_username_password(user_id, username, payload.password or "")
     except accounts.AccountError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message) from error
     store.delete_user_sessions(user_id)
-    _audit(user, "user.reset_password", target=str(user_id), detail=f"username={username}")
+    _audit(admin, "user.reset_password", target=str(user_id), detail=f"username={username}")
     return {"ok": True}
 
 
 @app.get("/api/admin/platform")
-def admin_get_platform(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_get_platform(admin: dict = Depends(current_admin)) -> dict:
     row = store.get_platform_config_row() or {}
     platform = load_platform_config()
     return {
@@ -3647,9 +3690,8 @@ def admin_get_platform(user: dict = Depends(current_user)) -> dict:
 
 @app.put("/api/admin/platform")
 def admin_set_platform(
-    payload: PlatformConfigRequest, user: dict = Depends(current_user)
+    payload: PlatformConfigRequest, admin: dict = Depends(current_admin)
 ) -> dict:
-    _require_admin(user)
     row = store.get_platform_config_row() or {}
     encrypted = row.get("api_key_encrypted") or ""
     if payload.api_key is not None and payload.api_key.strip():
@@ -3688,17 +3730,16 @@ def admin_set_platform(
     )
     _agents.clear()
     _audit(
-        user, "platform.update",
+        admin, "platform.update",
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
                 f" days={default_credit_days} ticket={distill_ticket_price}"
                 f" ticket_gift={distill_ticket_gift}"),
     )
-    return admin_get_platform(user)
+    return admin_get_platform(admin)
 
 
 @app.get("/api/admin/credits")
-def admin_credits(user: dict = Depends(current_user)) -> dict:
-    _require_admin(user)
+def admin_credits(admin: dict = Depends(current_admin)) -> dict:
     return {
         "totals": store.credits_totals(),
         "coins_totals": store.coins_totals(),
@@ -3711,10 +3752,9 @@ def admin_credits(user: dict = Depends(current_user)) -> dict:
 def admin_grant_coins(
     user_id: int,
     payload: CoinGrantRequest,
-    user: dict = Depends(current_user),
+    admin: dict = Depends(current_admin),
     idempotency_key: str = Header("", alias="Idempotency-Key"),
 ) -> dict:
-    _require_admin(user)
     target = store.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -3724,7 +3764,7 @@ def admin_grant_coins(
     if abs(delta) > MAX_GRANT_DELTA:
         raise HTTPException(status_code=400, detail="单次变动值过大")
     reason = (payload.reason or "").strip() or ("管理员发放念念币" if delta > 0 else "管理员扣减念念币")
-    actor = f"admin:{user.get('username') or user['id']}"
+    actor = f"admin:{admin.get('username') or admin['id']}"
     idem = idempotency_key.strip()[:64]
     try:
         result = store.grant_coins(user_id, delta, reason=reason, actor=actor, idem=idem)
@@ -3732,15 +3772,14 @@ def admin_grant_coins(
         raise HTTPException(status_code=400, detail=f"念念币不足，当前 {error.balance} 念念币") from error
     duplicate = bool(result.get("duplicate"))
     if not duplicate:
-        _audit(user, "user.grant_coins", target=str(user_id), detail=f"delta={delta} reason={reason}")
+        _audit(admin, "user.grant_coins", target=str(user_id), detail=f"delta={delta} reason={reason}")
     return {"ok": True, "balance": result["balance"], "duplicate": duplicate}
 
 
 @app.get("/api/admin/redemption-codes")
 def admin_redemption_codes(
-    status: str = "", limit: int = 200, user: dict = Depends(current_user)
+    status: str = "", limit: int = 200, admin: dict = Depends(current_admin)
 ) -> dict:
-    _require_admin(user)
     return {
         "items": store.list_redemption_codes(limit=limit, status=status),
         "stats": store.redemption_stats(),
@@ -3749,22 +3788,21 @@ def admin_redemption_codes(
 
 @app.post("/api/admin/redemption-codes")
 def admin_create_redemption_codes(
-    payload: RedemptionCodeRequest, user: dict = Depends(current_user)
+    payload: RedemptionCodeRequest, admin: dict = Depends(current_admin)
 ) -> dict:
-    _require_admin(user)
     coins = int(payload.coins)
     if coins <= 0:
         raise HTTPException(status_code=400, detail="念念币数量需大于 0")
     if coins > MAX_GRANT_DELTA or int(payload.count) > 200:
         raise HTTPException(status_code=400, detail="单次生成数量或面额过大")
-    actor = f"admin:{user.get('username') or user['id']}"
+    actor = f"admin:{admin.get('username') or admin['id']}"
     created = store.create_redemption_codes(
         int(payload.count), coins,
         batch=(payload.batch or "").strip(),
         note=(payload.note or "").strip(),
         actor=actor,
     )
-    _audit(user, "redemption.create", detail=f"count={len(created)} coins={coins}")
+    _audit(admin, "redemption.create", detail=f"count={len(created)} coins={coins}")
     return {"ok": True, "items": created, "stats": store.redemption_stats()}
 
 
@@ -3772,10 +3810,9 @@ def admin_create_redemption_codes(
 def admin_grant_credits(
     user_id: int,
     payload: CreditGrantRequest,
-    user: dict = Depends(current_user),
+    admin: dict = Depends(current_admin),
     idempotency_key: str = Header("", alias="Idempotency-Key"),
 ) -> dict:
-    _require_admin(user)
     target = store.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
@@ -3785,7 +3822,7 @@ def admin_grant_credits(
     if abs(delta) > MAX_GRANT_DELTA:
         raise HTTPException(status_code=400, detail="单次变动值过大")
     reason = (payload.reason or "").strip() or ("管理员发放" if delta > 0 else "管理员扣减")
-    actor = f"admin:{user.get('username') or user['id']}"
+    actor = f"admin:{admin.get('username') or admin['id']}"
     idem = idempotency_key.strip()[:64]
     try:
         result = store.grant_credits(
@@ -3798,16 +3835,15 @@ def admin_grant_credits(
         raise HTTPException(status_code=400, detail=f"余额不足，当前 {error.balance} 积分") from error
     duplicate = bool(result.get("duplicate"))
     if not duplicate:
-        _audit(user, "user.grant_credits", target=str(user_id),
+        _audit(admin, "user.grant_credits", target=str(user_id),
                detail=f"delta={delta} days={payload.credit_days} reason={reason}")
     return {"ok": True, "balance": result["balance"], "duplicate": duplicate}
 
 
 @app.post("/api/admin/packages")
 def admin_save_package(
-    payload: PackageRequest, user: dict = Depends(current_user)
+    payload: PackageRequest, admin: dict = Depends(current_admin)
 ) -> dict:
-    _require_admin(user)
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="套餐名称不能为空")
@@ -3829,7 +3865,7 @@ def admin_save_package(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error.args[0])) from error
-    _audit(user, "package.save", target=str(package.get("id")),
+    _audit(admin, "package.save", target=str(package.get("id")),
            detail=f"name={name} validity_days={days}")
     return {"ok": True, "package": package}
 

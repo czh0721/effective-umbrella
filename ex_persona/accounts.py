@@ -171,3 +171,54 @@ def set_username_password(user_id: int, username: str, password: str) -> None:
         raise AccountError("该用户名已被占用", status_code=409)
     salt, digest = hash_password(password)
     store.set_user_username(user_id, username, digest, salt)
+
+
+# --------------------------------------------------------------------------- #
+# 管理员账号（与用户账号完全分离）
+# --------------------------------------------------------------------------- #
+
+
+def create_admin(username: str, password: str, name: str = "") -> dict:
+    username = (username or "").strip()
+    validate_credentials(username, password)
+    if store.get_admin_by_username(username) is not None:
+        raise AccountError("该管理员用户名已存在", status_code=409)
+    salt, digest = hash_password(password)
+    return store.create_admin(username, digest, salt, name=(name or "").strip())
+
+
+def authenticate_admin(username: str, password: str) -> dict:
+    admin = store.get_admin_by_username((username or "").strip())
+    if admin is None or not verify_password(
+        password or "", admin.get("password_salt"), admin.get("password_hash")
+    ):
+        raise AccountError("管理员用户名或密码错误", status_code=401)
+    if (admin.get("status") or "active") != "active":
+        raise AccountError("管理员账号已被停用", status_code=403)
+    return admin
+
+
+def start_admin_session(admin_id: int, days: int = 7, pending_totp: bool = False) -> str:
+    token = secrets.token_urlsafe(32)
+    store.create_admin_session(admin_id, token, days=days, pending_totp=pending_totp)
+    return token
+
+
+def admin_session(token: str | None, allow_pending: bool = False) -> dict | None:
+    admin = store.get_admin_by_session(token)
+    if admin is None:
+        return None
+    if admin.get("totp_pending") and not allow_pending:
+        return None
+    return admin
+
+
+def end_admin_session(token: str | None) -> None:
+    store.delete_admin_session(token)
+
+
+def set_admin_password(admin_id: int, new: str) -> None:
+    if len(new or "") < MIN_PASSWORD:
+        raise AccountError(f"密码至少 {MIN_PASSWORD} 个字符")
+    salt, digest = hash_password(new)
+    store.set_admin_credentials(admin_id, digest, salt)

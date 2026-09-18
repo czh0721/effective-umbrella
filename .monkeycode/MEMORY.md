@@ -148,3 +148,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 假模型按提示词分流：系统提示含「人格蒸馏分析师」返回画像 JSON、含「对话记忆抽取器」返回记忆 JSON，其余按最后一条 user 消息触发词返回长回复 / 空 / 乱码（私用区字符触发 `looks_garbled`）。
   - 分段改写提示：`humanize.MAX_SEGMENT_CHARS=160`，假回复必须超过 160 字才会触发分段；调试分段时先确认长度。
 
+[User Instruction Summary]
+- Date: 2026-09-18
+- Context: 用户发现「我的」页出现「管理员」徽章与「管理后台」入口后明确要求
+- Instructions:
+  - 用户端与管理端必须彻底分离，属于两条独立产品线。
+  - 用户端任何页面都不得出现管理入口、管理员标识或角色徽章，也不提供跳转 `/admin` 的链接。
+  - 管理后台独立在 `/admin`（独立登录页 `/admin/login`），只能直接访问 URL 进入，不在用户端暴露。
+  - 普通用户不授予管理员权限。
+

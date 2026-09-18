@@ -84,17 +84,88 @@ def cmd_create_user(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_set_role(args: argparse.Namespace) -> int:
+def cmd_create_admin(args: argparse.Namespace) -> int:
+    from . import accounts, store
+
+    store.init_db()
+    try:
+        admin = accounts.create_admin(args.username, args.password, name=args.name or "")
+    except accounts.AccountError as error:
+        print(f"创建失败：{error.message}")
+        return 1
+    store.add_audit(
+        admin["id"], admin.get("username") or args.username, "admin.create", str(admin["id"]), "cli"
+    )
+    print(f"已创建管理员 id={admin['id']} username={admin['username']}")
+    return 0
+
+
+def cmd_list_admins(args: argparse.Namespace) -> int:
     from . import store
 
     store.init_db()
-    user = store.get_user_by_username(args.username)
-    if user is None:
-        print(f"用户不存在：{args.username}")
+    rows = store.list_admins()
+    if not rows:
+        print("暂无管理员")
+        return 0
+    print("id\tusername\tname\tstatus\tlast_login_at")
+    for row in rows:
+        print(
+            f"{row['id']}\t{row.get('username')}\t{row.get('name') or '-'}"
+            f"\t{row.get('status') or 'active'}\t{row.get('last_login_at') or '-'}"
+        )
+    return 0
+
+
+def cmd_set_admin_password(args: argparse.Namespace) -> int:
+    from . import accounts, store
+
+    store.init_db()
+    admin = store.get_admin_by_username(args.username)
+    if admin is None:
+        print(f"管理员不存在：{args.username}")
         return 1
-    store.set_user_role(user["id"], args.role)
-    store.add_audit(0, "cli", "user.set_role", str(user["id"]), f"role={args.role}")
-    print(f"已设置 id={user['id']} username={user['username']} role={args.role}")
+    try:
+        accounts.set_admin_password(admin["id"], args.password)
+    except accounts.AccountError as error:
+        print(f"设置失败：{error.message}")
+        return 1
+    store.delete_admin_sessions(admin["id"])
+    store.add_audit(
+        admin["id"],
+        admin.get("username") or args.username,
+        "admin.reset_password",
+        str(admin["id"]),
+        "cli",
+    )
+    print(f"已重置管理员 id={admin['id']} username={admin['username']} 的密码，旧会话已全部失效")
+    return 0
+
+
+def cmd_set_admin_status(args: argparse.Namespace) -> int:
+    from . import store
+
+    store.init_db()
+    admin = store.get_admin_by_username(args.username)
+    if admin is None:
+        print(f"管理员不存在：{args.username}")
+        return 1
+    status = (args.status or "active").strip().lower()
+    if status not in {"active", "disabled"}:
+        print("状态只能是 active 或 disabled")
+        return 1
+    if status != "active" and store.count_admins() <= 1:
+        print("至少保留一名启用中的管理员")
+        return 1
+    store.set_admin_status(admin["id"], status)
+    store.add_audit(
+        admin["id"],
+        admin.get("username") or args.username,
+        "admin.set_status",
+        str(admin["id"]),
+        f"status={status}",
+    )
+    print(f"管理员 id={admin['id']} username={admin['username']} 状态已设为 {status}")
     return 0
 
 
@@ -153,10 +224,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_user.add_argument("--password", required=True)
     p_user.set_defaults(func=cmd_create_user)
 
-    p_role = sub.add_parser("set-role", help="运维：设置用户角色（user / admin）")
-    p_role.add_argument("--username", required=True)
-    p_role.add_argument("--role", choices=["user", "admin"], default="admin")
-    p_role.set_defaults(func=cmd_set_role)
+    p_admin = sub.add_parser("create-admin", help="运维：创建独立的管理员账号")
+    p_admin.add_argument("--username", required=True)
+    p_admin.add_argument("--password", required=True)
+    p_admin.add_argument("--name", default="", help="显示名称（可选）")
+    p_admin.set_defaults(func=cmd_create_admin)
+
+    p_admins = sub.add_parser("list-admins", help="运维：列出全部管理员")
+    p_admins.set_defaults(func=cmd_list_admins)
+
+    p_admin_pwd = sub.add_parser("set-admin-password", help="运维：重置管理员密码并注销其全部会话")
+    p_admin_pwd.add_argument("--username", required=True)
+    p_admin_pwd.add_argument("--password", required=True)
+    p_admin_pwd.set_defaults(func=cmd_set_admin_password)
+
+    p_admin_status = sub.add_parser("set-admin-status", help="运维：启用/停用管理员账号")
+    p_admin_status.add_argument("--username", required=True)
+    p_admin_status.add_argument("--status", choices=["active", "disabled"], default="active")
+    p_admin_status.set_defaults(func=cmd_set_admin_status)
 
     p_password = sub.add_parser("set-password", help="运维：重置指定用户的密码并注销其全部会话")
     p_password.add_argument("--username", required=True)

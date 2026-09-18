@@ -414,16 +414,16 @@ class AdminAlertCooldownTest(unittest.TestCase):
         self.webapp = webapp_module
         self.records = []
         self.originals = {
-            "list_users": store.list_users,
-            "add_alert": store.add_alert,
+            "list_admins": store.list_admins,
+            "add_admin_alert": store.add_admin_alert,
         }
-        store.list_users = lambda: [{"id": 1, "role": "admin"}, {"id": 2, "role": "user"}]
-        store.add_alert = lambda user_id, kind, message: self.records.append((user_id, kind, message))
+        store.list_admins = lambda: [{"id": 1, "status": "active"}]
+        store.add_admin_alert = lambda admin_id, kind, message: self.records.append((admin_id, kind, message))
         webapp_module._admin_alert_at.clear()
 
     def tearDown(self):
-        store.list_users = self.originals["list_users"]
-        store.add_alert = self.originals["add_alert"]
+        store.list_admins = self.originals["list_admins"]
+        store.add_admin_alert = self.originals["add_admin_alert"]
         self.webapp._admin_alert_at.clear()
 
     def test_same_kind_is_throttled(self):

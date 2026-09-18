@@ -37,6 +37,18 @@ def _fake_agent(reply, platform=False):
     return _Agent()
 
 
+def _make_admin(username, password="password123", name=""):
+    return accounts.create_admin(username, password, name=name)
+
+
+def _admin_login(client, username, password="password123"):
+    response = client.post(
+        "/api/admin/auth/login", json={"username": username, "password": password}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 class AdminAndReportTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
@@ -44,17 +56,6 @@ class AdminAndReportTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
-
-    def _login(self, client, username, password):
-        response = client.post("/api/auth/login", json={"username": username, "password": password})
-        self.assertEqual(response.status_code, 200, response.text)
-        return response.json()["user"]
-
-    def _make_admin(self, username):
-        salt, digest = accounts.hash_password("password123")
-        return store.create_user(
-            username=username, password_hash=digest, password_salt=salt, role="admin"
-        )
 
     def test_report_flow(self):
         with TestClient(app) as client:
@@ -66,8 +67,8 @@ class AdminAndReportTest(unittest.TestCase):
             self.assertEqual(store.count_reports(), 1)
 
             admin_username = f"admin-{uuid.uuid4().hex[:8]}"
-            self._make_admin(admin_username)
-            self._login(client, admin_username, "password123")
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
             listing = client.get("/api/admin/reports")
             self.assertEqual(listing.status_code, 200, listing.text)
             self.assertEqual(listing.json()["items"][0]["id"], report_id)
@@ -80,13 +81,13 @@ class AdminAndReportTest(unittest.TestCase):
         with TestClient(app) as client:
             self._register(client, f"plain-{uuid.uuid4().hex[:8]}")
             blocked = client.get("/api/admin/summary")
-            self.assertEqual(blocked.status_code, 403)
+            self.assertEqual(blocked.status_code, 401)
 
     def test_admin_summary_counts(self):
         with TestClient(app) as client:
             admin_username = f"admin-{uuid.uuid4().hex[:8]}"
-            self._make_admin(admin_username)
-            self._login(client, admin_username, "password123")
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
             summary = client.get("/api/admin/summary")
             self.assertEqual(summary.status_code, 200, summary.text)
             data = summary.json()
@@ -108,6 +109,75 @@ class AdminAndReportTest(unittest.TestCase):
         with TestClient(app) as client:
             response = client.post("/api/reports", json={"detail": "x"})
             self.assertEqual(response.status_code, 401)
+
+
+class AdminSeparationTest(unittest.TestCase):
+    def test_registered_user_is_never_admin(self):
+        username = f"sep-{uuid.uuid4().hex[:8]}"
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/auth/register", json={"username": username, "password": "password123"}
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["user"]["role"], "user")
+            self.assertEqual(client.get("/api/admin/summary").status_code, 401)
+        user = store.get_user_by_username(username)
+        self.assertEqual(user["role"], "user")
+        self.assertNotIn("admin", {row["role"] for row in store.list_users()})
+
+    def test_store_refuses_to_promote_user(self):
+        user = store.create_user(f"noPromo-{uuid.uuid4().hex[:8]}", "h", "s")
+        with self.assertRaises(ValueError):
+            store.set_user_role(user["id"], "admin")
+        self.assertEqual(store.get_user(user["id"])["role"], "user")
+
+    def test_admin_session_cannot_access_user_api(self):
+        with TestClient(app) as client:
+            username = f"onlyadmin-{uuid.uuid4().hex[:8]}"
+            _make_admin(username)
+            _admin_login(client, username)
+            self.assertEqual(client.get("/api/admin/me").status_code, 200)
+            self.assertEqual(client.get("/api/me").status_code, 401)
+
+    def test_user_session_cannot_access_admin_api(self):
+        with TestClient(app) as client:
+            client.post(
+                "/api/auth/register",
+                json={"username": f"onlyuser-{uuid.uuid4().hex[:8]}", "password": "password123"},
+            )
+            self.assertEqual(client.get("/api/me").status_code, 200)
+            self.assertEqual(client.get("/api/admin/me").status_code, 401)
+
+    def test_admin_login_page_rejects_user_credentials(self):
+        with TestClient(app) as client:
+            username = f"mixed-{uuid.uuid4().hex[:8]}"
+            client.post(
+                "/api/auth/register", json={"username": username, "password": "password123"}
+            )
+            response = client.post(
+                "/api/admin/auth/login", json={"username": username, "password": "password123"}
+            )
+            self.assertEqual(response.status_code, 401, response.text)
+
+    def test_report_notifies_admins(self):
+        admin = _make_admin(f"adm-{uuid.uuid4().hex[:8]}")
+        with TestClient(app) as client:
+            client.post(
+                "/api/auth/register",
+                json={"username": f"rp-{uuid.uuid4().hex[:8]}", "password": "password123"},
+            )
+            created = client.post("/api/reports", json={"category": "abuse", "detail": "有人骂人"})
+            self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(store.count_unread_admin_alerts(admin["id"]), 1)
+
+    def test_admin_logout_clears_admin_session(self):
+        with TestClient(app) as client:
+            username = f"bye-{uuid.uuid4().hex[:8]}"
+            _make_admin(username)
+            _admin_login(client, username)
+            self.assertEqual(client.get("/api/admin/me").status_code, 200)
+            self.assertEqual(client.post("/api/admin/auth/logout").status_code, 200)
+            self.assertEqual(client.get("/api/admin/me").status_code, 401)
 
 
 class PlatformFallbackTest(unittest.TestCase):
@@ -178,52 +248,6 @@ class PlatformFallbackTest(unittest.TestCase):
         store.add_platform_call(user["id"])
         after = store.count_platform_calls_since(user["id"], "2000-01-01T00:00:00+00:00")
         self.assertEqual(after, before + 1)
-
-
-class AdminWhitelistTest(unittest.TestCase):
-    def test_env_whitelist_does_not_promote_on_register(self):
-        # 注册接口不再按白名单自动提权，避免注册同名大小写变体拿到后台权限。
-        username = f"wl-{uuid.uuid4().hex[:8]}"
-        os.environ["PERSONA_ADMIN_USERS"] = username
-        try:
-            with TestClient(app) as client:
-                response = client.post(
-                    "/api/auth/register", json={"username": username, "password": "password123"}
-                )
-                self.assertEqual(response.status_code, 200, response.text)
-                self.assertEqual(response.json()["user"]["role"], "user")
-                self.assertEqual(client.get("/api/admin/summary").status_code, 403)
-        finally:
-            os.environ.pop("PERSONA_ADMIN_USERS", None)
-
-    def test_env_whitelist_promotes_existing_account_at_startup(self):
-        username = f"wl-{uuid.uuid4().hex[:8]}"
-        salt, digest = accounts.hash_password("password123")
-        user = store.create_user(username=username, password_hash=digest, password_salt=salt)
-        os.environ["PERSONA_ADMIN_USERS"] = username.upper()
-        try:
-            from ex_persona import webapp as webapp_module
-
-            webapp_module._apply_admin_whitelist()
-            self.assertEqual(store.get_user(user["id"])["role"], "admin")
-        finally:
-            os.environ.pop("PERSONA_ADMIN_USERS", None)
-
-    def test_set_role_store_and_report_notifies_admin(self):
-        salt, digest = accounts.hash_password("password123")
-        admin = store.create_user(
-            username=f"adm-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
-        )
-        store.set_user_role(admin["id"], "admin")
-        self.assertEqual(store.get_user(admin["id"])["role"], "admin")
-        with TestClient(app) as client:
-            client.post(
-                "/api/auth/register",
-                json={"username": f"rp-{uuid.uuid4().hex[:8]}", "password": "password123"},
-            )
-            created = client.post("/api/reports", json={"category": "abuse", "detail": "有人骂人"})
-            self.assertEqual(created.status_code, 200, created.text)
-        self.assertEqual(store.count_unread_alerts(admin["id"]), 1)
 
 
 class PlatformQuotaRouteTest(unittest.TestCase):
@@ -327,12 +351,6 @@ class AccountStatusTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
 
-    def _make_admin(self, username):
-        salt, digest = accounts.hash_password("password123")
-        return store.create_user(
-            username=username, password_hash=digest, password_salt=salt, role="admin"
-        )
-
     def test_disabled_user_cannot_login_or_use_session(self):
         username = f"dis-{uuid.uuid4().hex[:8]}"
         with TestClient(app) as client:
@@ -352,22 +370,14 @@ class AccountStatusTest(unittest.TestCase):
             username=f"tgt-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
         admin_name = f"adm-{uuid.uuid4().hex[:8]}"
-        admin = self._make_admin(admin_name)
+        _make_admin(admin_name)
         with TestClient(app) as client:
-            login = client.post(
-                "/api/auth/login", json={"username": admin_name, "password": "password123"}
-            )
-            self.assertEqual(login.status_code, 200, login.text)
+            _admin_login(client, admin_name)
             disabled = client.post(
                 f"/api/admin/users/{target['id']}/status", json={"status": "disabled"}
             )
             self.assertEqual(disabled.status_code, 200, disabled.text)
             self.assertEqual(store.get_user(target["id"])["status"], "disabled")
-            # 不允许停用自己。
-            self_off = client.post(
-                f"/api/admin/users/{admin['id']}/status", json={"status": "disabled"}
-            )
-            self.assertEqual(self_off.status_code, 400, self_off.text)
             enabled = client.post(
                 f"/api/admin/users/{target['id']}/status", json={"status": "active"}
             )
@@ -448,17 +458,6 @@ class AdminSecurityTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
 
-    def _login(self, client, username, password="password123"):
-        response = client.post("/api/auth/login", json={"username": username, "password": password})
-        self.assertEqual(response.status_code, 200, response.text)
-        return response.json()["user"]
-
-    def _make_admin(self, username, password="password123"):
-        salt, digest = accounts.hash_password(password)
-        return store.create_user(
-            username=username, password_hash=digest, password_salt=salt, role="admin"
-        )
-
     def test_hsts_header_on_https(self):
         with TestClient(app) as client:
             response = client.get("/health", headers={"x-forwarded-proto": "https"})
@@ -474,59 +473,32 @@ class AdminSecurityTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(client.get("/api/me").status_code, 401)
 
-    def test_admin_role_change_writes_audit(self):
+    def test_admin_can_reset_user_password(self):
+        salt, digest = accounts.hash_password("password123")
+        target = store.create_user(
+            username=f"rp-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
+        )
+        admin_name = f"pr-{uuid.uuid4().hex[:8]}"
+        _make_admin(admin_name)
         with TestClient(app) as client:
-            admin_name = f"ar-{uuid.uuid4().hex[:8]}"
-            self._make_admin(admin_name)
-            self._login(client, admin_name)
-            salt, digest = accounts.hash_password("password123")
-            target = store.create_user(
-                username=f"tg-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
-            )
-            response = client.post(f"/api/admin/users/{target['id']}/role", json={"role": "admin"})
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(store.get_user(target["id"])["role"], "admin")
-            audit = client.get("/api/admin/audit")
-            self.assertEqual(audit.status_code, 200, audit.text)
-            actions = [item["action"] for item in audit.json()["items"]]
-            self.assertIn("user.set_role", actions)
-
-    def test_admin_cannot_demote_self(self):
-        with TestClient(app) as client:
-            admin_name = f"sd-{uuid.uuid4().hex[:8]}"
-            admin = self._make_admin(admin_name)
-            self._login(client, admin_name)
-            response = client.post(f"/api/admin/users/{admin['id']}/role", json={"role": "user"})
-            self.assertEqual(response.status_code, 400, response.text)
-
-    def test_admin_reset_password_invalidates_target(self):
-        with TestClient(app) as admin_client, TestClient(app) as user_client:
-            admin_name = f"pr-{uuid.uuid4().hex[:8]}"
-            self._make_admin(admin_name)
-            self._login(admin_client, admin_name)
-            target = self._register(user_client, f"tp-{uuid.uuid4().hex[:8]}")
-            response = admin_client.post(
+            _admin_login(client, admin_name)
+            response = client.post(
                 f"/api/admin/users/{target['id']}/password", json={"password": "newpassword123"}
             )
             self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(user_client.get("/api/me").status_code, 401)
-            self._login(user_client, target["username"], "newpassword123")
-
-    def test_admin_cannot_reset_other_admin_password(self):
-        with TestClient(app) as client:
-            actor_name = f"ra-{uuid.uuid4().hex[:8]}"
-            self._make_admin(actor_name)
-            self._login(client, actor_name)
-            victim = self._make_admin(f"rv-{uuid.uuid4().hex[:8]}")
-            response = client.post(
-                f"/api/admin/users/{victim['id']}/password", json={"password": "newpassword123"}
+            login = client.post(
+                "/api/auth/login",
+                json={"username": target["username"], "password": "newpassword123"},
             )
-            self.assertEqual(response.status_code, 403, response.text)
+            self.assertEqual(login.status_code, 200, login.text)
+            audit = client.get("/api/admin/audit")
+            actions = [item["action"] for item in audit.json()["items"]]
+            self.assertIn("user.reset_password", actions)
 
     def test_audit_requires_admin(self):
         with TestClient(app) as client:
             self._register(client, f"na-{uuid.uuid4().hex[:8]}")
-            self.assertEqual(client.get("/api/admin/audit").status_code, 403)
+            self.assertEqual(client.get("/api/admin/audit").status_code, 401)
 
 
 class AdminPageRouteTest(unittest.TestCase):
@@ -544,45 +516,28 @@ class AdminPageRouteTest(unittest.TestCase):
 
     def test_admin_login_redirects_admin_to_console(self):
         with TestClient(app) as client:
-            salt, digest = accounts.hash_password("password123")
-            user = store.create_user(
-                username=f"lg-adm-{uuid.uuid4().hex[:8]}",
-                password_hash=digest,
-                password_salt=salt,
-                role="admin",
-            )
-            client.post(
-                "/api/auth/login",
-                json={"username": user["username"], "password": "password123"},
-            )
+            username = f"lg-adm-{uuid.uuid4().hex[:8]}"
+            _make_admin(username)
+            _admin_login(client, username)
             response = client.get("/admin/login", follow_redirects=False)
             self.assertEqual(response.status_code, 302)
             self.assertEqual(response.headers["location"], "/admin")
 
-    def test_admin_page_redirects_non_admin(self):
+    def test_admin_page_redirects_logged_in_user_to_login(self):
         with TestClient(app) as client:
-            response = client.post(
+            client.post(
                 "/api/auth/register",
                 json={"username": f"pg-{uuid.uuid4().hex[:8]}", "password": "password123"},
             )
-            self.assertEqual(response.status_code, 200, response.text)
             page = client.get("/admin", follow_redirects=False)
             self.assertEqual(page.status_code, 302)
-            self.assertEqual(page.headers["location"], "/app")
+            self.assertEqual(page.headers["location"], "/admin/login")
 
     def test_admin_page_served_for_admin(self):
         with TestClient(app) as client:
-            salt, digest = accounts.hash_password("password123")
-            user = store.create_user(
-                username=f"pg-adm-{uuid.uuid4().hex[:8]}",
-                password_hash=digest,
-                password_salt=salt,
-                role="admin",
-            )
-            client.post(
-                "/api/auth/login",
-                json={"username": user["username"], "password": "password123"},
-            )
+            username = f"pg-adm-{uuid.uuid4().hex[:8]}"
+            _make_admin(username)
+            _admin_login(client, username)
             page = client.get("/admin")
             self.assertEqual(page.status_code, 200)
             self.assertIn("管理后台", page.text)

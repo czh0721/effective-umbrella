@@ -11,7 +11,7 @@ os.environ.setdefault("PERSONA_REGISTER_MAX", "1000")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from ex_persona import crypto, store, workspace  # noqa: E402
+from ex_persona import accounts, crypto, store, workspace  # noqa: E402
 from ex_persona.config import PlatformConfig  # noqa: E402
 from ex_persona.webapp import app  # noqa: E402
 
@@ -201,9 +201,13 @@ class CreditApiTest(unittest.TestCase):
         return response.json()["user"]
 
     def _admin(self, client, username):
-        user = self._register(client, username)
-        store.set_user_role(user["id"], "admin")
-        return store.get_user(user["id"])
+        self._register(client, username)
+        accounts.create_admin(username, "password123")
+        login = client.post(
+            "/api/admin/auth/login", json={"username": username, "password": "password123"}
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        return store.get_admin_by_username(username)
 
     def test_register_grants_initial_credits(self):
         with TestClient(app) as client:
@@ -258,7 +262,7 @@ class CreditApiTest(unittest.TestCase):
             response = client.post(
                 f"/api/admin/users/{target['id']}/credits", json={"delta": 10}
             )
-            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.status_code, 401)
 
     def test_admin_users_include_credits(self):
         with TestClient(app) as client:
@@ -293,9 +297,9 @@ class CreditApiTest(unittest.TestCase):
         with _isolated_db():
             with TestClient(app) as client:
                 self._register(client, "credit-plain-platform")
-                self.assertEqual(client.get("/api/admin/platform").status_code, 403)
+                self.assertEqual(client.get("/api/admin/platform").status_code, 401)
                 self.assertEqual(
-                    client.put("/api/admin/platform", json={"enabled": True}).status_code, 403
+                    client.put("/api/admin/platform", json={"enabled": True}).status_code, 401
                 )
 
 
@@ -568,9 +572,13 @@ class CoinCurrencyTest(unittest.TestCase):
         return response.json()["user"]
 
     def _admin(self, client, username):
-        user = self._register(client, username)
-        store.set_user_role(user["id"], "admin")
-        return store.get_user(user["id"])
+        self._register(client, username)
+        accounts.create_admin(username, "password123")
+        login = client.post(
+            "/api/admin/auth/login", json={"username": username, "password": "password123"}
+        )
+        self.assertEqual(login.status_code, 200, login.text)
+        return store.get_admin_by_username(username)
 
     def test_coins_default_and_grant(self):
         user = store.create_user("coin-grant", "h", "s")
@@ -674,9 +682,9 @@ class CoinCurrencyTest(unittest.TestCase):
             self._register(client, "coin-api-plain")
             self.assertEqual(
                 client.post("/api/admin/redemption-codes", json={"count": 1, "coins": 5}).status_code,
-                403,
+                401,
             )
-            self.assertEqual(client.get("/api/admin/redemption-codes").status_code, 403)
+            self.assertEqual(client.get("/api/admin/redemption-codes").status_code, 401)
 
     def test_admin_users_include_coins(self):
         with TestClient(app) as client:

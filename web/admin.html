@@ -34,7 +34,6 @@
           <div class="avatar" id="sideAvatar">A</div>
           <div class="who"><b id="sideName">管理员</b><span id="sideRole">超级管理员</span></div>
         </div>
-        <button class="btn small ghost wide" id="backAppBtn">返回应用</button>
         <button class="btn small ghost wide" id="logoutBtn">退出登录</button>
       </div>
     </aside>
@@ -124,7 +123,7 @@
             <div class="tbl-wrap">
               <table class="atable">
                 <thead><tr>
-                  <th>用户</th><th>角色</th><th>人格</th><th>积分</th><th>念念币</th><th>注册时间</th><th style="text-align:right">操作</th>
+                  <th>用户</th><th>人格</th><th>积分</th><th>念念币</th><th>注册时间</th><th style="text-align:right">操作</th>
                 </tr></thead>
                 <tbody id="userList"></tbody>
               </table>
@@ -164,7 +163,6 @@
               <nav class="segment" id="auditFilter">
                 <button data-action="all" class="active">全部</button>
                 <button data-action="report.resolve">举报</button>
-                <button data-action="user.set_role">角色</button>
                 <button data-action="user.reset_password">密码</button>
                 <button data-action="user.grant_credits">积分</button>
               </nav>
@@ -200,13 +198,13 @@
   <script>
     const CATEGORY = { abuse: "违法或滥用", bug: "功能异常", privacy: "隐私问题", other: "其他" };
     const ACTION_LABEL = {
-      "report.resolve": "处理举报", "user.set_role": "调整角色", "user.reset_password": "重置密码",
+      "report.resolve": "处理举报", "user.reset_password": "重置密码",
       "platform.update": "更新平台模型", "user.grant_credits": "调整积分", "package.save": "保存套餐",
       "user.grant_coins": "调整念念币", "redemption.create": "生成兑换码",
       "coins.redeem": "兑换念念币", "package.purchase": "购买套餐",
     };
     const ACTION_ICON = {
-      "report.resolve": "warning", "user.set_role": "user", "user.reset_password": "key",
+      "report.resolve": "warning", "user.reset_password": "key",
       "platform.update": "cpu", "user.grant_credits": "store", "package.save": "download",
       "user.grant_coins": "gift", "redemption.create": "key",
       "coins.redeem": "gift", "package.purchase": "store",
@@ -555,8 +553,7 @@
       const query = state.userQuery.trim().toLowerCase();
       const items = state.users.filter((item) => !query || (item.username || "").toLowerCase().includes(query));
       $("userCount").textContent = "共 " + state.users.length + " 人";
-      if (!items.length) { $("userList").innerHTML = `<tr><td colspan="7">${emptyState("没有匹配的用户", "user")}</td></tr>`; return; }
-      const meId = (window.__me && window.__me.id) || 0;
+      if (!items.length) { $("userList").innerHTML = `<tr><td colspan="6">${emptyState("没有匹配的用户", "user")}</td></tr>`; return; }
       const maxCredits = Math.max.apply(null, state.users.map((item) => item.credits || 0).concat([1]));
       const maxCoins = Math.max.apply(null, state.users.map((item) => item.coins || 0).concat([1]));
       $("userList").innerHTML = items.map((item) => {
@@ -564,8 +561,7 @@
         const coins = item.coins || 0;
         return `<tr>
           <td data-label="用户"><div class="u"><div class="avatar">${escapeHtml((item.username || "?").slice(0, 1).toUpperCase())}</div>
-            <div><b>${escapeHtml(item.username || "未命名")}</b><span>#${escapeHtml(String(item.id))}${item.id === meId ? " · 当前账号" : ""}</span></div></div></td>
-          <td data-label="角色"><span class="tag ${item.role === "admin" ? "admin" : "plain"}">${item.role === "admin" ? "管理员" : "普通用户"}</span>${item.status === "disabled" ? ' <span class="tag plain">已停用</span>' : ""}</td>
+            <div><b>${escapeHtml(item.username || "未命名")}</b><span>#${escapeHtml(String(item.id))}${item.status === "disabled" ? " · 已停用" : ""}</span></div></div></td>
           <td data-label="人格" class="num">${escapeHtml(String(item.personas || 0))}</td>
           <td data-label="积分"><div class="credits-cell">
             <div class="track"><i style="width:${Math.max(2, Math.round((credits / maxCredits) * 100))}%"></i></div>
@@ -577,9 +573,8 @@
           <td data-label="操作"><div class="user-acts">
             <button class="btn small ghost" data-grant="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">积分</button>
             <button class="btn small ghost" data-coins="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">念念币</button>
-            <button class="btn small ghost" data-role="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.role || "user")}"${item.id === meId ? " disabled" : ""}>${item.role === "admin" ? "降为用户" : "设为管理员"}</button>
             <button class="btn small" data-pass="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">重置密码</button>
-            <button class="btn small ${item.status === "disabled" ? "primary" : "ghost"}" data-status="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.status || "active")}" data-name="${escapeHtml(item.username || "")}"${item.id === meId ? " disabled" : ""}>${item.status === "disabled" ? "启用" : "停用"}</button>
+            <button class="btn small ${item.status === "disabled" ? "primary" : "ghost"}" data-status="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.status || "active")}" data-name="${escapeHtml(item.username || "")}">${item.status === "disabled" ? "启用" : "停用"}</button>
           </div></td>
         </tr>`;
       }).join("");
@@ -888,7 +883,7 @@
         state.online = true;
         renderOverview(); renderReports(); renderUsers(); renderAudit(); renderSystem(); renderCreditsPanel();
         renderNavBadges();
-        const name = (window.__me && window.__me.username) || "管理员";
+        const name = (window.__admin && (window.__admin.name || window.__admin.username)) || "管理员";
         $("adminLine").textContent = `${name} · 数据同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })} · 服务运行 ${fmtUptime(metrics.uptime_seconds)}`;
       } catch (error) {
         state.online = false;
@@ -960,19 +955,6 @@
           <div class="btnrow"><button class="btn primary" id="resolveOk" style="flex:1">确认处理</button></div>`, (body, mask) => {
           body.querySelector("#resolveOk").onclick = async () => {
             try { await api(`/api/admin/reports/${id}/resolve`, { method: "POST" }); closeModal(mask); toast("已处理"); await loadAll(); }
-            catch (error) { toast(error.message); }
-          };
-        });
-        return;
-      }
-      const roleButton = event.target.closest("[data-role]");
-      if (roleButton) {
-        const next = roleButton.dataset.current === "admin" ? "user" : "admin";
-        const label = next === "admin" ? "设为管理员" : "降为普通用户";
-        openModal(label, `<div class="sub">确认将用户 #${escapeHtml(roleButton.dataset.role)} ${label}？</div>
-          <div class="btnrow"><button class="btn primary" id="roleOk" style="flex:1">确认</button></div>`, (body, mask) => {
-          body.querySelector("#roleOk").onclick = async () => {
-            try { await api(`/api/admin/users/${roleButton.dataset.role}/role`, { method: "POST", body: JSON.stringify({ role: next }) }); closeModal(mask); toast("角色已更新"); await loadAll(); }
             catch (error) { toast(error.message); }
           };
         });
@@ -1069,10 +1051,9 @@
     $("sideClose").onclick = closeNav;
     $("navScrim").onclick = closeNav;
     $("refreshBtn").onclick = () => loadAll();
-    $("backAppBtn").onclick = () => { window.location.href = "/app"; };
     $("logoutBtn").onclick = async () => {
-      try { await api("/api/auth/logout", { method: "POST" }); } catch (error) { /* 忽略 */ }
-      window.location.href = "/login";
+      try { await api("/api/admin/auth/logout", { method: "POST" }); } catch (error) { /* 忽略 */ }
+      window.location.href = "/admin/login";
     };
 
     window.addEventListener("hashchange", () => setSection(segmentOf()));
@@ -1084,11 +1065,11 @@
       setSection(segmentOf());
       initSegments();
       try {
-        const data = await me();
-        window.__me = data.user;
-        $("sideName").textContent = data.user.username || "管理员";
-        $("sideAvatar").textContent = (data.user.username || "A").slice(0, 1).toUpperCase();
-      } catch (error) { return; }
+        const data = await api("/api/admin/me");
+        window.__admin = data.admin;
+        $("sideName").textContent = data.admin.name || data.admin.username || "管理员";
+        $("sideAvatar").textContent = (data.admin.username || "A").slice(0, 1).toUpperCase();
+      } catch (error) { window.location.href = "/admin/login"; return; }
       await loadAll();
     })();
   </script>

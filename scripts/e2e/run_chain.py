@@ -241,7 +241,15 @@ def main():
     check("激活后恢复 ready", store.get_persona(user_id, pid)["status"] == "ready")
 
     # 16. 后台：兑换码 / 套餐 / 双余额
-    store.set_user_role(user_id, "admin")
+    from ex_persona import accounts
+
+    admin_name = "e2e-admin"
+    if store.get_admin_by_username(admin_name) is None:
+        accounts.create_admin(admin_name, "password123")
+    admin_login = client.post(
+        "/api/admin/auth/login", json={"username": admin_name, "password": "password123"}
+    )
+    check("管理员登录 200", admin_login.status_code == 200, admin_login.text[:120])
     codes = client.post("/api/admin/redemption-codes", json={"count": 1, "coins": 60}).json()["items"]
     check("生成兑换码", len(codes) == 1, str(codes)[:80])
     coins_before_redeem = client.get("/api/credits").json()["coins"]

@@ -20,7 +20,6 @@
       <div class="profile-info">
         <div class="profile-name-row">
           <b id="userName">加载中…</b>
-          <span class="badge b-vip" id="userRole" style="display:none">管理员</span>
         </div>
         <div class="mini" id="userSub">点击设置昵称</div>
       </div>
@@ -140,11 +139,6 @@
         <div class="g-text"><div class="g-title">服务条款</div><div class="g-sub">使用规范与责任说明</div></div>
         <div class="spacer"></div><span class="chevron">›</span>
       </a>
-      <div class="g-row click" id="adminRow" style="display:none">
-        <span class="li-ico"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
-        <div class="g-text"><div class="g-title">管理后台</div><div class="g-sub">举报处理、用户与审计</div></div>
-        <div class="spacer"></div><span class="chevron">›</span>
-      </div>
     </section>
 
     <p class="mini" style="text-align:center;margin-top:14px">念念 Nian v1.0 · 仅供个人情感陪伴</p>
@@ -424,7 +418,6 @@
       paintAvatar($("userAvatar"), user);
       $("profileHero").onclick = () => openProfileEditor(user);
       $("profileHero").onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openProfileEditor(user); } };
-      if (user.role === "admin") { $("userRole").style.display = ""; $("adminRow").style.display = ""; }
       const personas = data.personas || [];
       activePersonaId = data.active_persona_id || (personas[0] && personas[0].id) || null;
       const wxText = data.wechat.bound ? (data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未在线") : "尚未绑定微信";
@@ -578,8 +571,6 @@
         window.location.href = "/login";
       } catch (error) { toast(error.message); }
     };
-
-    $("adminRow").onclick = () => { window.location.href = "/admin"; };
 
     $("helpRow").onclick = () => {
       openModal("使用帮助", `

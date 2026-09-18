@@ -223,6 +223,37 @@ CREATE TABLE IF NOT EXISTS admin_audit (
     detail TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
+-- 管理员账号与用户账号完全分离：管理员使用独立表、独立凭据与独立会话，
+-- users 表永远不存放管理员。
+CREATE TABLE IF NOT EXISTS admins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL DEFAULT '',
+    password_salt TEXT NOT NULL DEFAULT '',
+    name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    totp_secret TEXT NOT NULL DEFAULT '',
+    totp_enabled INTEGER NOT NULL DEFAULT 0,
+    last_login_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+    token TEXT PRIMARY KEY,
+    admin_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    pending_totp INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_admin ON admin_sessions(admin_id);
+CREATE TABLE IF NOT EXISTS admin_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL DEFAULT '',
+    read_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_alerts_admin ON admin_alerts(admin_id, read_at, id);
 CREATE TABLE IF NOT EXISTS platform_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     api_key_encrypted TEXT NOT NULL DEFAULT '',
@@ -526,7 +557,43 @@ def init_db() -> None:
                      for name, _credits, _coins, _badge, _sort, days in DEFAULT_PACKAGES],
                 )
             _migrate_credit_expiry(conn)
+            _migrate_admin_split(conn)
         _initialized = True
+
+
+def _migrate_admin_split(conn: sqlite3.Connection) -> None:
+    """把 users 表里的管理员迁移到独立的 admins 表（幂等）。
+
+    迁移后用户表不再存在 role='admin'：原管理员的账号作为普通用户保留，
+    数据与账本不变；管理员凭据复制到 admins 表，可继续用同一用户名密码登录后台。
+    """
+    if _meta_get(conn, "admin_split_migrated") == "1":
+        return
+    now = utcnow()
+    rows = conn.execute("SELECT * FROM users WHERE role = 'admin'").fetchall()
+    for row in rows:
+        username = (row["username"] or "").strip()
+        if not username:
+            continue
+        existing = conn.execute(
+            "SELECT id FROM admins WHERE username = ?", (username,)
+        ).fetchone()
+        if existing is None:
+            conn.execute(
+                "INSERT INTO admins (username, password_hash, password_salt, name, status,"
+                " totp_secret, totp_enabled, created_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+                (
+                    username,
+                    row["password_hash"] or "",
+                    row["password_salt"] or "",
+                    row["nickname"] or "",
+                    row["totp_secret"] or "",
+                    int(row["totp_enabled"] or 0),
+                    row["created_at"] or now,
+                ),
+            )
+        conn.execute("UPDATE users SET role = 'user' WHERE id = ?", (row["id"],))
+    _meta_set(conn, "admin_split_migrated", "1")
 
 
 def _migrate_credit_expiry(conn: sqlite3.Connection) -> None:
@@ -599,17 +666,17 @@ def create_user(
     wechat_openid: str | None = None,
     wechat_unionid: str | None = None,
     avatar: str | None = None,
-    role: str = "user",
 ) -> dict:
+    """创建普通用户。用户表永远不存放管理员（管理员见 ``create_admin``）。"""
     _ensure()
     with _lock:
         with connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO users (username, password_hash, password_salt, wechat_openid,"
                 " wechat_unionid, nickname, avatar, role, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 'user', ?)",
                 (username, password_hash, password_salt, wechat_openid, wechat_unionid,
-                 nickname, avatar, role, utcnow()),
+                 nickname, avatar, utcnow()),
             )
             new_id = cursor.lastrowid
     return get_user(new_id)  # type: ignore[arg-type]
@@ -712,9 +779,16 @@ def set_user_username(user_id: int, username: str, password_hash: str, password_
 
 
 def set_user_role(user_id: int, role: str) -> None:
+    """已废弃：管理员使用独立账号体系。
+
+    保留函数仅为兼容旧调用；任何把用户提升为管理员的请求都会被拒绝，
+    普通用户角色写入空操作，确保 users 表永远不出现 admin。
+    """
+    if (role or "user").strip().lower() == "admin":
+        raise ValueError("管理员使用独立账号体系，不能把用户提升为管理员")
     _ensure()
     with _lock, connect() as conn:
-        conn.execute("UPDATE users SET role = ? WHERE id = ?", (role or "user", user_id))
+        conn.execute("UPDATE users SET role = 'user' WHERE id = ?", (user_id,))
 
 
 def set_user_profile(user_id: int, *, nickname: str | None = None, avatar: str | None = None) -> None:
@@ -867,6 +941,216 @@ def purge_expired_login_states() -> None:
     _ensure()
     with _lock, connect() as conn:
         conn.execute("DELETE FROM login_states WHERE expires_at < ?", (utcnow(),))
+
+
+# --------------------------------------------------------------------------- #
+# 管理员账号与会话（与用户账号完全分离）
+# --------------------------------------------------------------------------- #
+
+def create_admin(
+    username: str,
+    password_hash: str,
+    password_salt: str,
+    name: str = "",
+    totp_secret: str = "",
+    totp_enabled: bool = False,
+) -> dict:
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO admins (username, password_hash, password_salt, name, status,"
+            " totp_secret, totp_enabled, created_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+            (username, password_hash, password_salt, name or "", totp_secret or "",
+             1 if totp_enabled else 0, utcnow()),
+        )
+        new_id = cursor.lastrowid
+    return get_admin(new_id)  # type: ignore[arg-type]
+
+
+def get_admin(admin_id: int) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        return _row(conn.execute("SELECT * FROM admins WHERE id = ?", (admin_id,)).fetchone())
+
+
+def get_admin_by_username(username: str) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        return _row(
+            conn.execute("SELECT * FROM admins WHERE username = ?", (username,)).fetchone()
+        )
+
+
+def list_admins() -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM admins ORDER BY id").fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_admins(status: str = "active") -> int:
+    _ensure()
+    query = "SELECT COUNT(*) AS n FROM admins"
+    params: tuple = ()
+    if status:
+        query += " WHERE status = ?"
+        params = (status,)
+    with connect() as conn:
+        row = conn.execute(query, params).fetchone()
+    return int(row["n"])
+
+
+def set_admin_credentials(admin_id: int, password_hash: str, password_salt: str) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE admins SET password_hash = ?, password_salt = ? WHERE id = ?",
+            (password_hash, password_salt, admin_id),
+        )
+
+
+def set_admin_name(admin_id: int, name: str) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("UPDATE admins SET name = ? WHERE id = ?", (name or "", admin_id))
+
+
+def set_admin_status(admin_id: int, status: str) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("UPDATE admins SET status = ? WHERE id = ?", (status or "active", admin_id))
+        if status != "active":
+            conn.execute("DELETE FROM admin_sessions WHERE admin_id = ?", (admin_id,))
+
+
+def set_admin_totp(admin_id: int, secret: str, enabled: bool) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE admins SET totp_secret = ?, totp_enabled = ? WHERE id = ?",
+            (secret or "", 1 if enabled else 0, admin_id),
+        )
+
+
+def touch_admin_login(admin_id: int) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("UPDATE admins SET last_login_at = ? WHERE id = ?", (utcnow(), admin_id))
+
+
+def create_admin_session(
+    admin_id: int, token: str, days: int = 7, pending_totp: bool = False
+) -> str:
+    _ensure()
+    expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+    with _lock, connect() as conn:
+        conn.execute(
+            "INSERT INTO admin_sessions (token, admin_id, created_at, expires_at, pending_totp)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (token, admin_id, utcnow(), expires, 1 if pending_totp else 0),
+        )
+    return expires
+
+
+def get_admin_by_session(token: str | None) -> dict | None:
+    if not token:
+        return None
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT a.*, s.expires_at AS _expires, s.pending_totp AS _pending FROM admin_sessions s"
+            " JOIN admins a ON a.id = s.admin_id WHERE s.token = ?",
+            (token,),
+        ).fetchone()
+    if row is None:
+        return None
+    admin = dict(row)
+    expires = admin.pop("_expires", None)
+    admin["totp_pending"] = bool(admin.pop("_pending", 0))
+    if expires and expires < utcnow():
+        delete_admin_session(token)
+        return None
+    if (admin.get("status") or "active") != "active":
+        return None
+    return admin
+
+
+def mark_admin_session_verified(token: str | None) -> None:
+    if not token:
+        return
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("UPDATE admin_sessions SET pending_totp = 0 WHERE token = ?", (token,))
+
+
+def delete_admin_session(token: str | None) -> None:
+    if not token:
+        return
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE token = ?", (token,))
+
+
+def delete_admin_sessions(admin_id: int, keep_token: str | None = None) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        if keep_token:
+            conn.execute(
+                "DELETE FROM admin_sessions WHERE admin_id = ? AND token != ?",
+                (admin_id, keep_token),
+            )
+        else:
+            conn.execute("DELETE FROM admin_sessions WHERE admin_id = ?", (admin_id,))
+
+
+def purge_expired_admin_sessions() -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute("DELETE FROM admin_sessions WHERE expires_at < ?", (utcnow(),))
+
+
+def add_admin_alert(admin_id: int, kind: str, message: str) -> int:
+    """写入一条运营告警（掉线、发送失败、触发配额等），仅管理员可见。"""
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO admin_alerts (admin_id, kind, message, read_at, created_at)"
+            " VALUES (?, ?, ?, '', ?)",
+            (admin_id, kind or "info", message or "", utcnow()),
+        )
+        return int(cursor.lastrowid or 0)
+
+
+def list_admin_alerts(admin_id: int, limit: int = 20, unread_only: bool = False) -> list[dict]:
+    _ensure()
+    query = "SELECT * FROM admin_alerts WHERE admin_id = ?"
+    params: list = [admin_id]
+    if unread_only:
+        query += " AND read_at = ''"
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(max(int(limit), 1))
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_unread_admin_alerts(admin_id: int) -> int:
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM admin_alerts WHERE admin_id = ? AND read_at = ''",
+            (admin_id,),
+        ).fetchone()
+    return int(row["n"])
+
+
+def mark_admin_alerts_read(admin_id: int) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE admin_alerts SET read_at = ? WHERE admin_id = ? AND read_at = ''",
+            (utcnow(), admin_id),
+        )
 
 
 # --------------------------------------------------------------------------- #
