@@ -2347,7 +2347,7 @@ def list_memories_api(
     selected = contact.strip()
     if not selected and contacts:
         selected = contacts[0]["contact_key"]
-    items = store.list_memories(user["id"], persona_id, selected) if selected else []
+    items = store.list_memories(user["id"], persona_id, selected, order="desc") if selected else []
     return {
         "enabled": bool(settings["model"].get("long_term_memory", True)),
         "extract_every": int(settings["model"].get("memory_extract_every") or 6),

@@ -3338,8 +3338,14 @@ def get_memory(user_id: int, memory_id: int) -> dict | None:
 
 
 def list_memories(
-    user_id: int, persona_id: int, contact_key: str | None = None, limit: int = 500
+    user_id: int, persona_id: int, contact_key: str | None = None, limit: int = 500, order: str = "asc"
 ) -> list[dict]:
+    """列出长期记忆。
+
+    ``order="asc"``（默认）返回按时间正序的最近 ``limit`` 条，供对话/朋友圈等
+    需要按时间线理解的场景使用；``order="desc"`` 返回最新在最前的顺序，供记忆
+    列表展示使用（最新的日期显示在顶部）。
+    """
     _ensure()
     query = "SELECT * FROM memories WHERE persona_id = ? AND user_id = ?"
     params: list = [persona_id, user_id]
@@ -3350,7 +3356,10 @@ def list_memories(
     params.append(limit)
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
-    return [dict(row) for row in reversed(rows)]
+    items = [dict(row) for row in rows]
+    if order == "desc":
+        return items
+    return list(reversed(items))
 
 
 def count_memories(user_id: int, persona_id: int, contact_key: str | None = None) -> int:
