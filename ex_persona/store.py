@@ -457,6 +457,15 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "tags": "TEXT NOT NULL DEFAULT ''",
         "status_reason": "TEXT NOT NULL DEFAULT ''",
         "disabled_at": "TEXT NOT NULL DEFAULT ''",
+        "failed_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "failed_first_at": "TEXT NOT NULL DEFAULT ''",
+        "locked_until": "TEXT NOT NULL DEFAULT ''",
+        "last_password_change_at": "TEXT NOT NULL DEFAULT ''",
+    },
+    "admins": {
+        "failed_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "failed_first_at": "TEXT NOT NULL DEFAULT ''",
+        "locked_until": "TEXT NOT NULL DEFAULT ''",
     },
     "moments": {"hidden": "INTEGER NOT NULL DEFAULT 0"},
     "credit_packages": {
@@ -600,6 +609,7 @@ def init_db() -> None:
             _migrate_credit_expiry(conn)
             _migrate_admin_split(conn)
             _migrate_admin_console(conn)
+            _migrate_account_security(conn)
             seed_at = utcnow()
             conn.executemany(
                 "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
@@ -649,6 +659,13 @@ def _migrate_admin_console(conn: sqlite3.Connection) -> None:
     if _meta_get(conn, "admin_console_migrated") == "1":
         return
     _meta_set(conn, "admin_console_migrated", "1")
+
+
+def _migrate_account_security(conn: sqlite3.Connection) -> None:
+    """账号安全强化：锁定列由 ``_MIGRATIONS`` 幂等补齐，这里登记一次性标记。"""
+    if _meta_get(conn, "account_security_migrated") == "1":
+        return
+    _meta_set(conn, "account_security_migrated", "1")
 
 
 def _migrate_credit_expiry(conn: sqlite3.Connection) -> None:
@@ -1209,7 +1226,12 @@ def orders_revenue(days: int = 30) -> dict:
 # --------------------------------------------------------------------------- #
 
 # 缺省为开启：开关上线前这些功能本就可用，避免新增开关导致功能被静默关闭。
-FEATURE_FLAG_DEFAULTS = {"moments_auto": 1, "wechat_login": 1, "platform_model": 1}
+FEATURE_FLAG_DEFAULTS = {
+    "moments_auto": 1,
+    "wechat_login": 1,
+    "platform_model": 1,
+    "admin_force_totp": 0,
+}
 FEATURE_FLAG_KEYS = tuple(FEATURE_FLAG_DEFAULTS)
 ANNOUNCEMENT_AUDIENCES = {"all"}
 
@@ -1620,6 +1642,166 @@ def reset_admin_totp(admin_id: int) -> bool:
             (int(admin_id),),
         )
         return bool(cursor.rowcount)
+
+
+# --------------------------------------------------------------------------- #
+# 账号安全：登录失败锁定
+# --------------------------------------------------------------------------- #
+
+LOCK_TABLES = {"user": "users", "admin": "admins"}
+
+
+def _lock_table(kind: str) -> str:
+    table = LOCK_TABLES.get((kind or "").strip().lower())
+    if table is None:
+        raise ValueError("未知的账号类型")
+    return table
+
+
+def get_lock_state(kind: str, account_id: int) -> dict:
+    """返回账号的锁定状态：是否锁定、截止时间、剩余秒数与失败次数。"""
+    table = _lock_table(kind)
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT failed_attempts, locked_until FROM {table} WHERE id = ?",
+            (int(account_id),),
+        ).fetchone()
+    if row is None:
+        return {"locked": False, "locked_until": "", "remaining_seconds": 0, "failed_attempts": 0}
+    until = (row["locked_until"] or "").strip()
+    remaining = 0
+    locked = False
+    if until:
+        try:
+            deadline = datetime.fromisoformat(until)
+        except ValueError:
+            deadline = None
+        if deadline is not None:
+            remaining = int((deadline - datetime.now(timezone.utc)).total_seconds())
+            locked = remaining > 0
+            if not locked:
+                remaining = 0
+    return {
+        "locked": locked,
+        "locked_until": until if locked else "",
+        "remaining_seconds": max(remaining, 0),
+        "failed_attempts": int(row["failed_attempts"] or 0),
+    }
+
+
+def record_login_failure(
+    kind: str, account_id: int, window_seconds: int, max_failures: int, lock_seconds: int
+) -> dict:
+    """记录一次登录失败；达到阈值时写入锁定截止时间并返回锁定状态。"""
+    table = _lock_table(kind)
+    _ensure()
+    now = datetime.now(timezone.utc)
+    with _lock, connect() as conn:
+        row = conn.execute(
+            f"SELECT failed_attempts, failed_first_at, locked_until FROM {table} WHERE id = ?",
+            (int(account_id),),
+        ).fetchone()
+        if row is None:
+            return {"locked": False, "locked_until": "", "remaining_seconds": 0, "failed_attempts": 0}
+        first_raw = (row["failed_first_at"] or "").strip()
+        attempts = int(row["failed_attempts"] or 0)
+        try:
+            first_at = datetime.fromisoformat(first_raw) if first_raw else None
+        except ValueError:
+            first_at = None
+        if first_at is None or (now - first_at).total_seconds() > window_seconds:
+            attempts = 0
+            first_at = now
+        attempts += 1
+        locked_until = ""
+        if attempts >= max_failures:
+            locked_until = (now + timedelta(seconds=lock_seconds)).isoformat()
+            attempts = 0
+            first_at = now
+        conn.execute(
+            f"UPDATE {table} SET failed_attempts = ?, failed_first_at = ?, locked_until = ?"
+            " WHERE id = ?",
+            (attempts, first_at.isoformat(), locked_until, int(account_id)),
+        )
+    if locked_until:
+        return {
+            "locked": True,
+            "locked_until": locked_until,
+            "remaining_seconds": int(lock_seconds),
+            "failed_attempts": 0,
+        }
+    return {"locked": False, "locked_until": "", "remaining_seconds": 0, "failed_attempts": attempts}
+
+
+def clear_login_failures(kind: str, account_id: int) -> None:
+    """登录成功或管理员解锁后清零失败计数与锁定。"""
+    table = _lock_table(kind)
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            f"UPDATE {table} SET failed_attempts = 0, failed_first_at = '', locked_until = ''"
+            " WHERE id = ?",
+            (int(account_id),),
+        )
+
+
+def list_locked_accounts(limit: int = 100) -> list[dict]:
+    """后台展示当前锁定中的用户与管理员。"""
+    _ensure()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    items: list[dict] = []
+    with connect() as conn:
+        for kind, table in LOCK_TABLES.items():
+            rows = conn.execute(
+                f"SELECT id, username, locked_until FROM {table}"
+                " WHERE locked_until != '' AND locked_until > ? ORDER BY locked_until DESC LIMIT ?",
+                (now_iso, int(limit)),
+            ).fetchall()
+            for row in rows:
+                state = _remaining_from(row["locked_until"])
+                items.append(
+                    {
+                        "kind": kind,
+                        "id": int(row["id"]),
+                        "username": row["username"],
+                        "locked_until": row["locked_until"],
+                        "remaining_seconds": state,
+                    }
+                )
+    items.sort(key=lambda item: item["locked_until"], reverse=True)
+    return items[: int(limit)]
+
+
+def _remaining_from(until: str) -> int:
+    try:
+        deadline = datetime.fromisoformat(until)
+    except (TypeError, ValueError):
+        return 0
+    return max(int((deadline - datetime.now(timezone.utc)).total_seconds()), 0)
+
+
+def unlock_account(kind: str, account_id: int) -> bool:
+    """管理员解锁：清零失败计数与锁定，返回账号是否存在。"""
+    table = _lock_table(kind)
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            f"UPDATE {table} SET failed_attempts = 0, failed_first_at = '', locked_until = ''"
+            " WHERE id = ?",
+            (int(account_id),),
+        )
+        return bool(cursor.rowcount)
+
+
+def mark_password_changed(user_id: int) -> None:
+    """记录用户最近一次改密时间。"""
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE users SET last_password_change_at = ? WHERE id = ?",
+            (utcnow(), int(user_id)),
+        )
 
 
 def set_user_username(user_id: int, username: str, password_hash: str, password_salt: str) -> None:

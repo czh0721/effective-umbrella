@@ -24,13 +24,13 @@ class ProfileTest(unittest.TestCase):
         store.init_db()
 
     def _client(self, username="profile-user"):
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         store.create_user(username=username, password_hash=digest, password_salt=salt)
         client = TestClient(app)
         client.__enter__()
         self.addCleanup(client.__exit__, None, None, None)
         login = client.post(
-            "/api/auth/login", json={"username": username, "password": "password123"}
+            "/api/auth/login", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(login.status_code, 200, login.text)
         return client

@@ -303,6 +303,10 @@
               </table>
             </div>
           </div>
+          <div class="acard">
+            <div class="acard-head" id="secHead"></div>
+            <div id="secLocked"></div>
+          </div>
         </section>
       </div>
     </main>
@@ -324,8 +328,8 @@
       "notice.broadcast": "站内通知", "binding.stop": "强制下线",
       "task.retry": "重试任务", "flag.set": "功能开关",
       "redemption.void": "作废兑换码", "admin.create": "创建管理员",
-      "admin.set_status": "管理员状态", "admin.reset_password": "重置管理员密码",
-      "admin.reset_totp": "重置双因素",
+      "admin.set_status": "管理员状态", "admin.reset_password": "重置管理员密码", "admin.reset_totp": "重置双因素",
+      "security.unlock": "解锁账户",
     };
     const ACTION_ICON = {
       "report.resolve": "warning", "user.reset_password": "key",
@@ -372,6 +376,7 @@
       reportFilter: "all", auditAction: "all", userQuery: "", auditQuery: "",
       personas: [], moments: [], contentKind: "personas", contentQuery: "",
       announcements: [], admins: [], flags: {}, bindings: [], backups: [], tasks: [],
+      locked: [],
       adminQuery: "",
     };
 
@@ -952,7 +957,7 @@
 
     /* ------------------------------------------------------------- system extras */
     function renderSystemExtras() {
-      const labels = { moments_auto: "朋友圈自动发布", wechat_login: "微信登录", platform_model: "平台模型" };
+      const labels = { moments_auto: "朋友圈自动发布", wechat_login: "微信登录", platform_model: "平台模型", admin_force_totp: "管理员强制双因素" };
       $("flagHead").innerHTML = headIcon("sliders", "功能开关");
       $("flagList").innerHTML = Object.keys(labels).map((key) => {
         const on = !!(state.flags || {})[key];
@@ -1025,6 +1030,30 @@
           </div></td>
         </tr>`;
       }).join("");
+    }
+
+    /* ------------------------------------------------------------ security */
+    function renderSecurity() {
+      const items = state.locked || [];
+      const forceOn = !!(state.flags || {}).admin_force_totp;
+      $("secHead").innerHTML = headIcon("shield", "账号安全", `<span class="spacer"></span><span class="tag ${forceOn ? "resolved" : "plain"}">强制双因素 ${forceOn ? "已开启" : "已关闭"}</span><span class="tag plain">锁定 ${items.length}</span>`);
+      if (!items.length) {
+        $("secLocked").innerHTML = emptyState("当前没有锁定的账户", "shield");
+        return;
+      }
+      $("secLocked").innerHTML = `<div class="feed">${items.map((item) => {
+        const kind = item.kind === "admin" ? "管理员" : "用户";
+        const minutes = Math.max(1, Math.ceil(Number(item.remaining_seconds || 0) / 60));
+        return `<div class="feed-item">
+          <div class="feed-dot">${icon("shield")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.username || ("#" + item.id))} <span class="tag open">${escapeHtml(kind)}</span></div>
+            <div class="feed-sub">还需等待约 ${minutes} 分钟</div>
+            <div class="feed-time">${fmtTime(item.locked_until)}</div>
+          </div>
+          <button class="btn small ghost" data-unlock-kind="${escapeHtml(item.kind)}" data-unlock-id="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || String(item.id))}">解除锁定</button>
+        </div>`;
+      }).join("")}</div>`;
     }
 
     /* ------------------------------------------------------------- audit */
@@ -1315,7 +1344,7 @@
       $("refreshBtn").disabled = true;
       try {
         const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery, orders, dashboard,
-          personas, moments, announcements, admins, flags, bindings, backups, tasks] = await Promise.all([
+          personas, moments, announcements, admins, flags, bindings, backups, tasks, locked] = await Promise.all([
           api("/api/admin/summary"), api("/api/admin/users?size=100"), api("/api/admin/reports"),
           api("/api/admin/audit"), api("/api/metrics"), api("/health"),
           api("/api/admin/platform"), api("/api/admin/credits"),
@@ -1325,6 +1354,7 @@
           api("/api/admin/announcements"), api("/api/admin/admins"),
           api("/api/admin/system/flags"), api("/api/admin/system/bindings"),
           api("/api/admin/system/backups"), api("/api/admin/system/tasks?limit=200"),
+          api("/api/admin/security/locked"),
         ]);
         state.summary = summary; state.users = users.items || []; state.reports = reports.items || [];
         state.audit = audit.items || []; state.metrics = metrics; state.health = health;
@@ -1339,9 +1369,10 @@
         state.announcements = announcements.items || []; state.admins = admins.items || [];
         state.flags = flags.flags || {}; state.bindings = bindings.items || [];
         state.backups = backups.items || []; state.tasks = tasks.items || [];
+        state.locked = locked.items || [];
         state.online = true;
         renderOverview(); renderReports(); renderUsers(); renderContent(); renderOrders(); renderOps();
-        renderAudit(); renderSystem(); renderSystemExtras(); renderCreditsPanel(); renderAdmins();
+        renderAudit(); renderSystem(); renderSystemExtras(); renderCreditsPanel(); renderAdmins(); renderSecurity();
         renderNavBadges();
         const name = (window.__admin && (window.__admin.name || window.__admin.username)) || "管理员";
         $("adminLine").textContent = `${name} · 数据同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })} · 服务运行 ${fmtUptime(metrics.uptime_seconds)}`;
@@ -1480,13 +1511,13 @@
       const passButton = event.target.closest("[data-pass]");
       if (passButton) {
         const name = passButton.dataset.name || ("用户 #" + passButton.dataset.pass);
-        openModal("重置密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（至少 8 位），该用户所有登录会立即失效。</div>
+        openModal("重置密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（10–128 位，含大小写字母、数字与符号），该用户所有登录会立即失效。</div>
           <div class="field"><label>新密码</label><input id="np" type="password" autocomplete="new-password" /></div>
           <div class="btnrow"><button class="btn primary" id="npOk" style="flex:1">确认重置</button></div>`, (body, mask) => {
           const submit = async () => {
             if (submit.busy) return;
             const value = body.querySelector("#np").value;
-            if (!value || value.length < 8) { toast("密码至少 8 位"); return; }
+            if (!value || value.length < 10) { toast("密码至少 10 位，且需含大小写字母、数字与符号"); return; }
             submit.busy = true;
             try { await api(`/api/admin/users/${passButton.dataset.pass}/password`, { method: "POST", body: JSON.stringify({ password: value }) }); closeModal(mask); toast("密码已重置，该用户会话已失效"); await loadAll(); }
             catch (error) { submit.busy = false; toast(error.message); }
@@ -1630,6 +1661,18 @@
         } catch (error) { toast(error.message); flagButton.disabled = false; }
         return;
       }
+      const unlockBtn = event.target.closest("[data-unlock-kind]");
+      if (unlockBtn) {
+        unlockBtn.disabled = true;
+        try {
+          await api("/api/admin/security/unlock", {
+            method: "POST",
+            body: JSON.stringify({ kind: unlockBtn.dataset.unlockKind, id: Number(unlockBtn.dataset.unlockId) }),
+          });
+          toast("已解除锁定"); await loadAll();
+        } catch (error) { toast(error.message); unlockBtn.disabled = false; }
+        return;
+      }
       const bindingStop = event.target.closest("[data-binding-stop]");
       if (bindingStop) {
         bindingStop.disabled = true;
@@ -1663,12 +1706,12 @@
       const adminPass = event.target.closest("[data-admin-pass]");
       if (adminPass) {
         const name = adminPass.dataset.name || ("管理员 #" + adminPass.dataset.adminPass);
-        openModal("重置管理员密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（至少 8 位），其所有后台会话会立即失效。</div>
+        openModal("重置管理员密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（10–128 位，含大小写字母、数字与符号），其所有后台会话会立即失效。</div>
           <div class="field"><label>新密码</label><input id="apw" type="password" autocomplete="new-password" /></div>
           <div class="btnrow"><button class="btn primary" id="apwOk" style="flex:1">确认重置</button></div>`, (body, mask) => {
           body.querySelector("#apwOk").onclick = async () => {
             const value = body.querySelector("#apw").value;
-            if (!value || value.length < 8) { toast("密码至少 8 位"); return; }
+            if (!value || value.length < 10) { toast("密码至少 10 位，且需含大小写字母、数字与符号"); return; }
             try {
               await api(`/api/admin/admins/${adminPass.dataset.adminPass}/password`, { method: "POST", body: JSON.stringify({ password: value }) });
               closeModal(mask); toast("管理员密码已重置"); await loadAll();
@@ -1705,13 +1748,13 @@
       openModal("新建管理员", `<div class="sub">创建一个独立的后台管理员账号，与用户账号完全分离。</div>
         <div class="field"><label>用户名</label><input id="adName" autocomplete="off" /></div>
         <div class="field"><label>显示名称（可选）</label><input id="adLabel" autocomplete="off" /></div>
-        <div class="field"><label>密码（至少 8 位）</label><input id="adPass" type="password" autocomplete="new-password" /></div>
+        <div class="field"><label>密码（10–128 位，含大小写字母、数字与符号）</label><input id="adPass" type="password" autocomplete="new-password" /></div>
         <div class="btnrow"><button class="btn primary" id="adOk" style="flex:1">创建</button></div>`, (body, mask) => {
         body.querySelector("#adOk").onclick = async () => {
           const username = body.querySelector("#adName").value.trim();
           const password = body.querySelector("#adPass").value;
           if (!username || !password) { toast("请填写用户名与密码"); return; }
-          if (password.length < 8) { toast("密码至少 8 位"); return; }
+          if (password.length < 10) { toast("密码至少 10 位，且需含大小写字母、数字与符号"); return; }
           try {
             await api("/api/admin/admins", { method: "POST", body: JSON.stringify({ username, password, name: body.querySelector("#adLabel").value.trim() }) });
             closeModal(mask); toast("管理员已创建"); await loadAll();

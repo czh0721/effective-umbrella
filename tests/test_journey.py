@@ -322,7 +322,7 @@ class ApiFlowTest(unittest.TestCase):
         self.originals = {"get_agent": webapp_module.get_agent}
         username = f"flow-{os.urandom(4).hex()}"
         self.user = self.client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         ).json()["user"]
         self.persona = self.client.post(
             "/api/personas", json={"name": "小屿"}
@@ -377,7 +377,7 @@ class ReplySegmentOrderTest(unittest.TestCase):
         self.client = TestClient(webapp_module.app)
         username = f"seg-{os.urandom(4).hex()}"
         self.user = self.client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         ).json()["user"]
         self.persona = self.client.post(
             "/api/personas", json={"name": "小段"}

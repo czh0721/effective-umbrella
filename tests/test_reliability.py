@@ -158,7 +158,7 @@ class MediaRouteTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -308,7 +308,7 @@ class HardeningTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -334,14 +334,14 @@ class HardeningTest(unittest.TestCase):
             other = TestClient(app)
             self.assertEqual(
                 other.post(
-                    "/api/auth/login", json={"username": name, "password": "password123"}
+                    "/api/auth/login", json={"username": name, "password": "Password123!"}
                 ).status_code,
                 200,
             )
             self.assertEqual(other.get("/api/me").status_code, 200)
             changed = client.post(
                 "/api/account/password",
-                json={"current": "password123", "new": "newpassword456"},
+                json={"current": "Password123!", "new": "newPassword456!"},
             )
             self.assertEqual(changed.status_code, 200, changed.text)
             self.assertEqual(other.get("/api/me").status_code, 401)
@@ -354,7 +354,7 @@ class HardeningTest(unittest.TestCase):
             store.add_turn(user["id"], persona["id"], "user", "你好", contact="c1")
             store.add_memory(user["id"], persona["id"], "c1", "fact", "喜欢猫")
             balance_before = store.get_credits(user["id"])
-            response = client.post("/api/account/delete", json={"current": "password123", "new": ""})
+            response = client.post("/api/account/delete", json={"current": "Password123!", "new": ""})
             self.assertEqual(response.status_code, 200, response.text)
             # 账号软删：保留账号行与账本用于对账，个人内容全部清除。
             self.assertEqual(store.get_user(user["id"])["status"], "deleted")
@@ -464,7 +464,7 @@ class PersonaLifecycleTest(unittest.TestCase):
         with TestClient(app) as client:
             username = f"lifecycle-{uuid.uuid4().hex[:8]}"
             client.post(
-                "/api/auth/register", json={"username": username, "password": "password123"}
+                "/api/auth/register", json={"username": username, "password": "Password123!"}
             )
             me = client.get("/api/me").json()["user"]
             persona = client.post("/api/personas", json={"name": "告别"}).json()["persona"]

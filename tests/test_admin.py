@@ -37,11 +37,11 @@ def _fake_agent(reply, platform=False):
     return _Agent()
 
 
-def _make_admin(username, password="password123", name=""):
+def _make_admin(username, password="Password123!", name=""):
     return accounts.create_admin(username, password, name=name)
 
 
-def _admin_login(client, username, password="password123"):
+def _admin_login(client, username, password="Password123!"):
     response = client.post(
         "/api/admin/auth/login", json={"username": username, "password": password}
     )
@@ -52,7 +52,7 @@ def _admin_login(client, username, password="password123"):
 class AdminAndReportTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -116,7 +116,7 @@ class AdminSeparationTest(unittest.TestCase):
         username = f"sep-{uuid.uuid4().hex[:8]}"
         with TestClient(app) as client:
             response = client.post(
-                "/api/auth/register", json={"username": username, "password": "password123"}
+                "/api/auth/register", json={"username": username, "password": "Password123!"}
             )
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["user"]["role"], "user")
@@ -143,7 +143,7 @@ class AdminSeparationTest(unittest.TestCase):
         with TestClient(app) as client:
             client.post(
                 "/api/auth/register",
-                json={"username": f"onlyuser-{uuid.uuid4().hex[:8]}", "password": "password123"},
+                json={"username": f"onlyuser-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
             )
             self.assertEqual(client.get("/api/me").status_code, 200)
             self.assertEqual(client.get("/api/admin/me").status_code, 401)
@@ -152,10 +152,10 @@ class AdminSeparationTest(unittest.TestCase):
         with TestClient(app) as client:
             username = f"mixed-{uuid.uuid4().hex[:8]}"
             client.post(
-                "/api/auth/register", json={"username": username, "password": "password123"}
+                "/api/auth/register", json={"username": username, "password": "Password123!"}
             )
             response = client.post(
-                "/api/admin/auth/login", json={"username": username, "password": "password123"}
+                "/api/admin/auth/login", json={"username": username, "password": "Password123!"}
             )
             self.assertEqual(response.status_code, 401, response.text)
 
@@ -164,7 +164,7 @@ class AdminSeparationTest(unittest.TestCase):
         with TestClient(app) as client:
             client.post(
                 "/api/auth/register",
-                json={"username": f"rp-{uuid.uuid4().hex[:8]}", "password": "password123"},
+                json={"username": f"rp-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
             )
             created = client.post("/api/reports", json={"category": "abuse", "detail": "有人骂人"})
             self.assertEqual(created.status_code, 200, created.text)
@@ -192,7 +192,7 @@ class PlatformFallbackTest(unittest.TestCase):
             with TestClient(app) as client:
                 response = client.post(
                     "/api/auth/register",
-                    json={"username": f"pf-{uuid.uuid4().hex[:8]}", "password": "password123"},
+                    json={"username": f"pf-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
                 )
                 user_id = response.json()["user"]["id"]
                 from ex_persona.webapp import build_config
@@ -206,7 +206,7 @@ class PlatformFallbackTest(unittest.TestCase):
 
     def test_user_key_wins_over_platform(self):
         os.environ["PERSONA_PLATFORM_API_KEY"] = "platform-key"
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         user = store.create_user(
             username=f"own-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
@@ -222,7 +222,7 @@ class PlatformFallbackTest(unittest.TestCase):
     def test_invalid_own_key_falls_back_to_platform(self):
         os.environ["PERSONA_PLATFORM_API_KEY"] = "platform-key"
         try:
-            salt, digest = accounts.hash_password("password123")
+            salt, digest = accounts.hash_password("Password123!")
             user = store.create_user(
                 username=f"stale-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
             )
@@ -240,7 +240,7 @@ class PlatformFallbackTest(unittest.TestCase):
         self.assertEqual(built.api_key, "platform-key")
 
     def test_platform_usage_counting(self):
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         user = store.create_user(
             username=f"usage-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
@@ -253,7 +253,7 @@ class PlatformFallbackTest(unittest.TestCase):
 class PlatformQuotaRouteTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -298,7 +298,7 @@ class PlatformQuotaRouteTest(unittest.TestCase):
 class BridgeContactIsolationTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -346,7 +346,7 @@ class BridgeContactIsolationTest(unittest.TestCase):
 class AccountStatusTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -360,12 +360,12 @@ class AccountStatusTest(unittest.TestCase):
             # 停用后现有会话立即失效，且不能重新登录。
             self.assertEqual(client.get("/api/me").status_code, 401)
             relogin = client.post(
-                "/api/auth/login", json={"username": username, "password": "password123"}
+                "/api/auth/login", json={"username": username, "password": "Password123!"}
             )
             self.assertEqual(relogin.status_code, 403, relogin.text)
 
     def test_admin_can_disable_and_enable_user(self):
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         target = store.create_user(
             username=f"tgt-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
@@ -385,7 +385,7 @@ class AccountStatusTest(unittest.TestCase):
             self.assertEqual(store.get_user(target["id"])["status"], "active")
 
     def test_bridge_silent_for_disabled_account(self):
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         owner = store.create_user(
             username=f"own-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
@@ -436,7 +436,7 @@ class CsrfMiddlewareTest(unittest.TestCase):
         with TestClient(app) as client:
             response = client.post(
                 "/api/auth/register",
-                json={"username": f"csrf-{uuid.uuid4().hex[:8]}", "password": "password123"},
+                json={"username": f"csrf-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
             )
             self.assertEqual(response.status_code, 200, response.text)
 
@@ -451,7 +451,7 @@ class CsrfMiddlewareTest(unittest.TestCase):
 
 
 class AdminSecurityTest(unittest.TestCase):
-    def _register(self, client, username, password="password123"):
+    def _register(self, client, username, password="Password123!"):
         response = client.post(
             "/api/auth/register", json={"username": username, "password": password}
         )
@@ -474,7 +474,7 @@ class AdminSecurityTest(unittest.TestCase):
             self.assertEqual(client.get("/api/me").status_code, 401)
 
     def test_admin_can_reset_user_password(self):
-        salt, digest = accounts.hash_password("password123")
+        salt, digest = accounts.hash_password("Password123!")
         target = store.create_user(
             username=f"rp-{uuid.uuid4().hex[:8]}", password_hash=digest, password_salt=salt
         )
@@ -483,12 +483,12 @@ class AdminSecurityTest(unittest.TestCase):
         with TestClient(app) as client:
             _admin_login(client, admin_name)
             response = client.post(
-                f"/api/admin/users/{target['id']}/password", json={"password": "newpassword123"}
+                f"/api/admin/users/{target['id']}/password", json={"password": "newPassword123!"}
             )
             self.assertEqual(response.status_code, 200, response.text)
             login = client.post(
                 "/api/auth/login",
-                json={"username": target["username"], "password": "newpassword123"},
+                json={"username": target["username"], "password": "newPassword123!"},
             )
             self.assertEqual(login.status_code, 200, login.text)
             audit = client.get("/api/admin/audit")
@@ -527,7 +527,7 @@ class AdminPageRouteTest(unittest.TestCase):
         with TestClient(app) as client:
             client.post(
                 "/api/auth/register",
-                json={"username": f"pg-{uuid.uuid4().hex[:8]}", "password": "password123"},
+                json={"username": f"pg-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
             )
             page = client.get("/admin", follow_redirects=False)
             self.assertEqual(page.status_code, 302)

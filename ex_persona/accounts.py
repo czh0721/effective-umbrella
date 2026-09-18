@@ -11,10 +11,36 @@ from . import store
 
 MIN_USERNAME = 3
 MIN_PASSWORD = 8
+PASSWORD_MIN_LENGTH = 10
+PASSWORD_MAX_LENGTH = 128
 SCRYPT_N = 2 ** 14
 SCRYPT_R = 8
 SCRYPT_P = 1
 DK_LEN = 32
+
+# 常见弱密码：命中即拒绝（小写比较）。
+WEAK_PASSWORDS = {
+    "password",
+    "password1",
+    "password123",
+    "passw0rd",
+    "123456789",
+    "1234567890",
+    "qwertyuiop",
+    "qwerty123",
+    "1qaz2wsx",
+    "letmein",
+    "iloveyou",
+    "welcome1",
+    "admin123",
+    "admin888",
+    "abc12345",
+}
+
+# 登录失败锁定：窗口内达到阈值即锁定。
+LOGIN_FAILURE_WINDOW_SECONDS = 900
+LOGIN_MAX_FAILURES = 5
+LOGIN_LOCK_SECONDS = 900
 
 # TOTP（RFC 6238）：SHA1、6 位、30 秒步长，兼容主流验证器 App。
 TOTP_DIGITS = 6
@@ -53,14 +79,54 @@ def verify_password(password: str, salt_hex: str, hash_hex: str) -> bool:
     return hmac.compare_digest(_derive(password, salt), expected)
 
 
+def _password_problems(password: str, username: str = "") -> list[str]:
+    """收集密码不满足强度的原因，空列表表示通过。"""
+    value = password or ""
+    problems: list[str] = []
+    if len(value) < PASSWORD_MIN_LENGTH:
+        problems.append(f"密码至少 {PASSWORD_MIN_LENGTH} 个字符")
+    elif len(value) > PASSWORD_MAX_LENGTH:
+        problems.append(f"密码最多 {PASSWORD_MAX_LENGTH} 个字符")
+    missing: list[str] = []
+    if not any(char.isupper() for char in value):
+        missing.append("大写字母")
+    if not any(char.islower() for char in value):
+        missing.append("小写字母")
+    if not any(char.isdigit() for char in value):
+        missing.append("数字")
+    if not any((not char.isalnum()) and (not char.isspace()) for char in value):
+        missing.append("符号")
+    if missing:
+        problems.append("密码需包含" + "、".join(missing))
+    lowered = value.lower()
+    name = (username or "").strip().lower()
+    if lowered in WEAK_PASSWORDS:
+        problems.append("密码过于简单，请勿使用常见弱密码")
+    elif len(name) >= 3 and name in lowered:
+        problems.append("密码不能包含用户名")
+    return problems
+
+
+def validate_password_strength(password: str, username: str = "") -> None:
+    """统一密码强度校验：长度、四类字符、弱密码与用户名相似。"""
+    problems = _password_problems(password, username)
+    if problems:
+        raise AccountError(problems[0])
+
+
+def check_password_strength(password: str, username: str = "") -> dict:
+    """供前端实时提示：返回是否通过以及全部原因。"""
+    problems = _password_problems(password, username)
+    return {"ok": not problems, "problems": problems}
+
+
 def validate_credentials(username: str, password: str) -> None:
     username = (username or "").strip()
     if len(username) < MIN_USERNAME:
         raise AccountError(f"用户名至少 {MIN_USERNAME} 个字符")
     if any(char.isspace() for char in username):
         raise AccountError("用户名不能包含空白字符")
-    if len(password or "") < MIN_PASSWORD:
-        raise AccountError(f"密码至少 {MIN_PASSWORD} 个字符")
+    validate_password_strength(password, username)
 
 
 def register(username: str, password: str) -> dict:
@@ -72,10 +138,37 @@ def register(username: str, password: str) -> dict:
     return store.create_user(username=username, password_hash=digest, password_salt=salt)
 
 
+def _locked_error(state: dict) -> AccountError:
+    remaining = max(int(state.get("remaining_seconds") or 0), 1)
+    minutes = max(1, (remaining + 59) // 60)
+    error = AccountError(f"账户已临时锁定，请在 {minutes} 分钟后重试", status_code=429)
+    error.retry_after = remaining  # type: ignore[attr-defined]
+    return error
+
+
+def _record_failure(kind: str, account_id: int) -> None:
+    state = store.record_login_failure(
+        kind,
+        account_id,
+        LOGIN_FAILURE_WINDOW_SECONDS,
+        LOGIN_MAX_FAILURES,
+        LOGIN_LOCK_SECONDS,
+    )
+    if state["locked"]:
+        raise _locked_error(state)
+
+
 def authenticate(username: str, password: str) -> dict:
     user = store.get_user_by_username((username or "").strip())
+    if user is not None:
+        state = store.get_lock_state("user", user["id"])
+        if state["locked"]:
+            raise _locked_error(state)
     if user is None or not verify_password(password or "", user.get("password_salt"), user.get("password_hash")):
+        if user is not None:
+            _record_failure("user", user["id"])
         raise AccountError("用户名或密码错误", status_code=401)
+    store.clear_login_failures("user", user["id"])
     if (user.get("status") or "active") != "active":
         raise AccountError("账号已被停用，请联系管理员", status_code=403)
     return user
@@ -155,12 +248,12 @@ def change_password(user_id: int, current: str, new: str) -> None:
         raise AccountError("账号不存在", status_code=404)
     if user.get("password_hash") and not verify_password(current or "", user.get("password_salt"), user.get("password_hash")):
         raise AccountError("当前密码不正确", status_code=401)
-    if len(new or "") < MIN_PASSWORD:
-        raise AccountError(f"密码至少 {MIN_PASSWORD} 个字符")
+    validate_password_strength(new, user.get("username") or "")
     if user.get("password_hash") and verify_password(new or "", user.get("password_salt"), user.get("password_hash")):
         raise AccountError("新密码不能与当前密码相同")
     salt, digest = hash_password(new)
     store.set_user_username(user_id, user.get("username") or f"user{user_id}", digest, salt)
+    store.mark_password_changed(user_id)
 
 
 def set_username_password(user_id: int, username: str, password: str) -> None:
@@ -189,10 +282,17 @@ def create_admin(username: str, password: str, name: str = "") -> dict:
 
 def authenticate_admin(username: str, password: str) -> dict:
     admin = store.get_admin_by_username((username or "").strip())
+    if admin is not None:
+        state = store.get_lock_state("admin", admin["id"])
+        if state["locked"]:
+            raise _locked_error(state)
     if admin is None or not verify_password(
         password or "", admin.get("password_salt"), admin.get("password_hash")
     ):
+        if admin is not None:
+            _record_failure("admin", admin["id"])
         raise AccountError("管理员用户名或密码错误", status_code=401)
+    store.clear_login_failures("admin", admin["id"])
     if (admin.get("status") or "active") != "active":
         raise AccountError("管理员账号已被停用", status_code=403)
     return admin
@@ -218,7 +318,7 @@ def end_admin_session(token: str | None) -> None:
 
 
 def set_admin_password(admin_id: int, new: str) -> None:
-    if len(new or "") < MIN_PASSWORD:
-        raise AccountError(f"密码至少 {MIN_PASSWORD} 个字符")
+    admin = store.get_admin(admin_id)
+    validate_password_strength(new, (admin or {}).get("username") or "")
     salt, digest = hash_password(new)
     store.set_admin_credentials(admin_id, digest, salt)

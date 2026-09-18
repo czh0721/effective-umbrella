@@ -77,7 +77,7 @@ TRANSCRIPT = """2023-05-01 21:03:00 小鹿
 
 def main():
     # 1. 注册
-    reg = client.post("/api/auth/register", json={"username": f"e2e-{os.urandom(3).hex()}", "password": "password123"})
+    reg = client.post("/api/auth/register", json={"username": f"e2e-{os.urandom(3).hex()}", "password": "Password123!"})
     check("注册 200", reg.status_code == 200, reg.text[:120])
     user_id = reg.json()["user"]["id"]
 
@@ -245,9 +245,9 @@ def main():
 
     admin_name = "e2e-admin"
     if store.get_admin_by_username(admin_name) is None:
-        accounts.create_admin(admin_name, "password123")
+        accounts.create_admin(admin_name, "Password123!")
     admin_login = client.post(
-        "/api/admin/auth/login", json={"username": admin_name, "password": "password123"}
+        "/api/admin/auth/login", json={"username": admin_name, "password": "Password123!"}
     )
     check("管理员登录 200", admin_login.status_code == 200, admin_login.text[:120])
     codes = client.post("/api/admin/redemption-codes", json={"count": 1, "coins": 60}).json()["items"]
@@ -360,7 +360,7 @@ def main():
           system_health.text[:120])
     admins = client.get("/api/admin/admins")
     check("管理员列表 200", admins.status_code == 200, admins.text[:120])
-    new_admin = client.post("/api/admin/admins", json={"username": "e2e-helper", "password": "password123"})
+    new_admin = client.post("/api/admin/admins", json={"username": "e2e-helper", "password": "Password123!"})
     check("创建管理员 200或已存在", new_admin.status_code in (200, 409), new_admin.text[:120])
     audit = client.get("/api/admin/audit")
     check("审计含新动作",
@@ -387,6 +387,47 @@ def main():
           dash_forced.status_code == 200 and not dash_forced.json().get("cached"),
           dash_forced.text[:120])
 
+    # 账号安全：弱密码拒绝 + 登录失败锁定与管理员解锁
+    weak = client.post("/api/auth/register", json={
+        "username": f"e2e-weak-{os.urandom(3).hex()}", "password": "password123",
+    })
+    check("弱密码注册被拒绝", weak.status_code == 400, weak.text[:120])
+
+    lock_user = f"e2e-lock-{os.urandom(3).hex()}"
+    with TestClient(webapp_module.app) as lock_client:
+        lock_reg = lock_client.post("/api/auth/register", json={
+            "username": lock_user, "password": "Password123!",
+        })
+        check("锁定用例注册 200", lock_reg.status_code == 200, lock_reg.text[:120])
+        lock_id = lock_reg.json()["user"]["id"]
+        lock_client.post("/api/auth/logout")
+        last = None
+        for _ in range(5):
+            last = lock_client.post("/api/auth/login", json={
+                "username": lock_user, "password": "WrongPass1!",
+            })
+        check("连续失败触发锁定 429",
+              last.status_code == 429 and int(last.headers.get("Retry-After", "0")) > 0,
+              last.text[:120])
+        blocked = lock_client.post("/api/auth/login", json={
+            "username": lock_user, "password": "Password123!",
+        })
+        check("锁定期内正确密码仍被拒", blocked.status_code == 429, blocked.text[:120])
+
+    locked = client.get("/api/admin/security/locked")
+    check("锁定列表包含该账户",
+          locked.status_code == 200
+          and any(i.get("id") == lock_id and i.get("kind") == "user"
+                  for i in locked.json().get("items", [])),
+          locked.text[:120])
+    unlock = client.post("/api/admin/security/unlock", json={"kind": "user", "id": lock_id})
+    check("管理员解锁 200", unlock.status_code == 200, unlock.text[:120])
+    with TestClient(webapp_module.app) as relock_client:
+        re_ok = relock_client.post("/api/auth/login", json={
+            "username": lock_user, "password": "Password123!",
+        })
+        check("解锁后可正常登录", re_ok.status_code == 200, re_ok.text[:120])
+
     # 17. 通知中心
     notes = client.get("/api/notifications").json()
     check("通知中心有记录", len(notes["items"]) >= 1, f"unread={notes['unread']}")
@@ -395,6 +436,31 @@ def main():
     export = client.get("/api/export", params={"persona_id": pid})
     check("导出 zip 200", export.status_code == 200 and export.headers.get("content-type", "").startswith("application/zip"),
           f"status={export.status_code} bytes={len(export.content)}")
+
+    # 19. 管理员强制双因素：开启后未绑定管理员只能走绑定流程
+    force_on = client.put("/api/admin/system/flags/admin_force_totp", json={"value": True})
+    check("开启强制双因素", force_on.status_code == 200, force_on.text[:120])
+    with TestClient(webapp_module.app) as f_client:
+        f_login = f_client.post("/api/admin/auth/login", json={
+            "username": admin_name, "password": "Password123!",
+        })
+        check("未绑定管理员返回绑定标记",
+              f_login.status_code == 200 and f_login.json().get("totp_setup_required") is True,
+              f_login.text[:120])
+        f_blocked = f_client.get("/api/admin/summary")
+        check("未绑定访问业务接口 403", f_blocked.status_code == 403, f_blocked.text[:120])
+        f_setup = f_client.post("/api/admin/account/2fa/setup")
+        secret = (f_setup.json() or {}).get("secret", "")
+        f_enable = (
+            f_client.post("/api/admin/account/2fa/enable",
+                          json={"code": accounts.totp_code_now(secret)})
+            if secret else None
+        )
+        check("绑定双因素后业务接口 200",
+              f_enable is not None and f_enable.status_code == 200
+              and f_client.get("/api/admin/summary").status_code == 200,
+              f_enable.text[:120] if f_enable is not None else "no secret")
+    client.put("/api/admin/system/flags/admin_force_totp", json={"value": False})
 
     failed = [r for r in RESULTS if not r[1]]
     print(f"\n===== {len(RESULTS) - len(failed)}/{len(RESULTS)} passed =====")

@@ -18,11 +18,11 @@ from ex_persona import accounts, store  # noqa: E402
 from ex_persona.webapp import app  # noqa: E402
 
 
-def _make_admin(username, password="password123"):
+def _make_admin(username, password="Password123!"):
     return accounts.create_admin(username, password)
 
 
-def _admin_login(client, username, password="password123"):
+def _admin_login(client, username, password="Password123!"):
     response = client.post(
         "/api/admin/auth/login", json={"username": username, "password": password}
     )
@@ -32,7 +32,7 @@ def _admin_login(client, username, password="password123"):
 
 def _register(client, username):
     response = client.post(
-        "/api/auth/register", json={"username": username, "password": "password123"}
+        "/api/auth/register", json={"username": username, "password": "Password123!"}
     )
     assert response.status_code == 200, response.text
     return response.json()["user"]
@@ -379,16 +379,16 @@ class AdminManagementTest(unittest.TestCase):
 
             created = client.post(
                 "/api/admin/admins",
-                json={"username": f"new-admin-{uuid.uuid4().hex[:8]}", "password": "password123", "name": "副手"},
+                json={"username": f"new-admin-{uuid.uuid4().hex[:8]}", "password": "Password123!", "name": "副手"},
             )
             self.assertEqual(created.status_code, 200, created.text)
             new_id = created.json()["admin"]["id"]
 
             reset = client.post(
-                f"/api/admin/admins/{new_id}/password", json={"password": "password456"}
+                f"/api/admin/admins/{new_id}/password", json={"password": "Password456!"}
             )
             self.assertEqual(reset.status_code, 200, reset.text)
-            self.assertTrue(accounts.authenticate_admin(store.get_admin(new_id)["username"], "password456"))
+            self.assertTrue(accounts.authenticate_admin(store.get_admin(new_id)["username"], "Password456!"))
 
             totp = client.post(f"/api/admin/admins/{new_id}/totp")
             self.assertEqual(totp.status_code, 200, totp.text)

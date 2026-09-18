@@ -90,10 +90,11 @@
             <label for="password">密码</label>
             <div class="inp">
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#9a9cab" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-              <input id="password" type="password" autocomplete="current-password" placeholder="至少 8 位" />
+              <input id="password" type="password" autocomplete="current-password" placeholder="至少 10 位，含大小写、数字、符号" />
               <span class="pw-toggle" id="togglePw" role="button" tabindex="0" aria-label="显示或隐藏密码">显示</span>
             </div>
           </div>
+          <p class="mini" id="pwHint" style="display:none;margin:-6px 0 12px 2px;color:var(--text-3)"></p>
           <div class="field hide" id="confirmField">
             <label for="confirm">确认密码</label>
             <div class="inp">
@@ -223,6 +224,7 @@
         : '还没有账号？<a href="#" id="goReg" style="color:var(--v);font-weight:700">立即注册</a>';
       bindHint();
       clearErrors();
+      refreshPwHint();
     }
 
     modeSeg.querySelectorAll("[data-mode]").forEach((node) => {
@@ -249,6 +251,36 @@
       if (event.key === " " || event.key === "Enter") { event.preventDefault(); togglePassword(); }
     });
 
+    function passwordProblems(value, username) {
+      const problems = [];
+      if (!value || value.length < 10) problems.push("至少 10 个字符");
+      if (value.length > 128) problems.push("最多 128 个字符");
+      if (!/[A-Z]/.test(value)) problems.push("大写字母");
+      if (!/[a-z]/.test(value)) problems.push("小写字母");
+      if (!/[0-9]/.test(value)) problems.push("数字");
+      if (!/[^A-Za-z0-9\s]/.test(value)) problems.push("符号");
+      const name = (username || "").trim().toLowerCase();
+      if (name.length >= 3 && value.toLowerCase().includes(name)) problems.push("不能包含用户名");
+      return problems;
+    }
+
+    function refreshPwHint() {
+      const hint = $("pwHint");
+      if (mode !== "register") { hint.style.display = "none"; return; }
+      const problems = passwordProblems(passwordInput.value, usernameInput.value);
+      if (!passwordInput.value) { hint.style.display = "none"; return; }
+      hint.style.display = "";
+      if (problems.length) {
+        hint.textContent = "还需包含：" + problems.join("、");
+        hint.style.color = "var(--red)";
+      } else {
+        hint.textContent = "密码强度符合要求";
+        hint.style.color = "var(--green, #1aa06d)";
+      }
+    }
+    passwordInput.addEventListener("input", refreshPwHint);
+    usernameInput.addEventListener("input", refreshPwHint);
+
     $("form").addEventListener("submit", async (event) => {
       event.preventDefault();
       const username = usernameInput.value.trim();
@@ -256,7 +288,8 @@
       clearErrors();
       if (!username || !password) { showErr("msgLogin", "请填写用户名与密码"); return; }
       if (mode === "register") {
-        if (password.length < 8) { showErr("msgLogin", "密码至少需要 8 位"); return; }
+        const problems = passwordProblems(password, username);
+        if (problems.length) { showErr("msgLogin", "密码不符合要求：" + problems.join("、")); return; }
         if (confirmInput.value !== password) { showErr("msgLogin", "两次输入的密码不一致"); return; }
       }
       if (!agreeBox.classList.contains("on")) { showErr("msgLogin", "请先同意服务条款与隐私政策"); return; }

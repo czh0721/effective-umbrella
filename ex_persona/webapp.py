@@ -690,6 +690,13 @@ def _login_response(user: dict, request: Request | None = None, *, pending_totp:
     return response
 
 
+def _account_error(error: accounts.AccountError) -> HTTPException:
+    """把账号异常转换为 HTTP 异常，锁定场景附带 Retry-After 剩余秒数。"""
+    retry_after = getattr(error, "retry_after", None)
+    headers = {"Retry-After": str(retry_after)} if retry_after else None
+    return HTTPException(status_code=error.status_code, detail=error.message, headers=headers)
+
+
 def _page(file_name: str):
     def handler(request: Request):
         user = accounts.session_user(request.cookies.get(SESSION_COOKIE))
@@ -714,21 +721,40 @@ def _public_admin(admin: dict) -> dict:
 
 def current_admin(request: Request) -> dict:
     """管理员会话依赖：使用独立的 cookie 与存储，与用户会话互不影响。"""
-    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE))
+    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE), allow_pending=True)
+    if admin is None:
+        raise HTTPException(status_code=401, detail="请先登录管理员账号")
+    if admin.get("totp_pending"):
+        raise HTTPException(status_code=403, detail="需要先完成双因素验证")
+    if store.feature_flag_enabled("admin_force_totp") and not admin.get("totp_enabled"):
+        raise HTTPException(status_code=403, detail="需要先启用双因素")
+    return admin
+
+
+def require_pending_admin(request: Request) -> dict:
+    """待验证管理员依赖：仅用于双因素绑定接口，允许 pending 会话访问。"""
+    admin = accounts.admin_session(request.cookies.get(ADMIN_SESSION_COOKIE), allow_pending=True)
     if admin is None:
         raise HTTPException(status_code=401, detail="请先登录管理员账号")
     return admin
 
 
 def _admin_login_response(
-    admin: dict, request: Request | None = None, *, pending_totp: bool = False
+    admin: dict,
+    request: Request | None = None,
+    *,
+    pending_totp: bool = False,
+    setup_required: bool = False,
 ) -> JSONResponse:
-    token = accounts.start_admin_session(admin["id"], pending_totp=pending_totp)
-    body = (
-        {"ok": True, "totp_required": True}
-        if pending_totp
-        else {"ok": True, "admin": _public_admin(admin)}
+    token = accounts.start_admin_session(
+        admin["id"], pending_totp=pending_totp or setup_required
     )
+    if setup_required:
+        body = {"ok": True, "totp_setup_required": True}
+    elif pending_totp:
+        body = {"ok": True, "totp_required": True}
+    else:
+        body = {"ok": True, "admin": _public_admin(admin)}
     response = JSONResponse(body)
     response.set_cookie(
         ADMIN_SESSION_COOKIE,
@@ -1168,6 +1194,10 @@ class PasswordOnly(BaseModel):
     password: str
 
 
+class PasswordStrengthRequest(BaseModel):
+    password: str = ""
+
+
 class TotpCode(BaseModel):
     code: str
 
@@ -1301,6 +1331,11 @@ class AdminStatusChange(BaseModel):
 
 class AdminCredentialReset(BaseModel):
     password: str
+
+
+class AdminUnlockRequest(BaseModel):
+    kind: str
+    id: int
 
 
 class RedemptionCodeRequest(BaseModel):
@@ -1489,7 +1524,7 @@ def register(payload: Credentials, request: Request) -> JSONResponse:
         user = accounts.register(payload.username, payload.password)
     except accounts.AccountError as error:
         _auth_note(ip_key)
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     _auth_clear(ip_key)
     _register_note(_client_ip(request))
     workspace.ensure_user(user["id"])
@@ -1523,7 +1558,7 @@ def login(payload: Credentials, request: Request) -> JSONResponse:
         user = accounts.authenticate(payload.username, payload.password)
     except accounts.AccountError as error:
         _auth_note(ip_key, user_key)
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     _auth_clear(ip_key, user_key)
     if user.get("totp_enabled"):
         return _login_response(user, request, pending_totp=True)
@@ -1555,10 +1590,26 @@ def login_2fa(payload: TotpCode, request: Request) -> JSONResponse:
 
 @app.get("/api/account/security")
 def account_security(user: dict = Depends(current_user)) -> dict:
+    lock = store.get_lock_state("user", user["id"])
     return {
         "totp_enabled": bool(user.get("totp_enabled")),
         "totp_pending": bool(user.get("totp_secret")) and not bool(user.get("totp_enabled")),
+        "last_password_change_at": user.get("last_password_change_at") or "",
+        "lock": lock,
+        "password_policy": {
+            "min_length": accounts.PASSWORD_MIN_LENGTH,
+            "max_length": accounts.PASSWORD_MAX_LENGTH,
+            "classes": ["大写字母", "小写字母", "数字", "符号"],
+        },
     }
+
+
+@app.post("/api/account/password/strength")
+def password_strength(
+    payload: PasswordStrengthRequest, user: dict = Depends(current_user)
+) -> dict:
+    """实时校验密码强度，返回是否通过及具体原因。"""
+    return accounts.check_password_strength(payload.password, user.get("username") or "")
 
 
 @app.post("/api/account/2fa/setup")
@@ -1700,7 +1751,7 @@ def change_password(
     try:
         accounts.change_password(user["id"], payload.current, payload.new)
     except accounts.AccountError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     # 改密后让其他设备的会话立即失效，并给当前浏览器换发新会话。
     store.delete_user_sessions(user["id"])
     return _login_response(user, request)
@@ -3587,10 +3638,12 @@ def admin_login(payload: Credentials, request: Request) -> JSONResponse:
         admin = accounts.authenticate_admin(payload.username, payload.password)
     except accounts.AccountError as error:
         _auth_note(ip_key, user_key)
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     _auth_clear(ip_key, user_key)
     if admin.get("totp_enabled"):
         return _admin_login_response(admin, request, pending_totp=True)
+    if store.feature_flag_enabled("admin_force_totp"):
+        return _admin_login_response(admin, request, setup_required=True)
     store.touch_admin_login(admin["id"])
     return _admin_login_response(admin, request)
 
@@ -3624,6 +3677,31 @@ def admin_logout(request: Request) -> JSONResponse:
     response = JSONResponse({"ok": True})
     response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
     return response
+
+
+@app.post("/api/admin/account/2fa/setup")
+def admin_setup_2fa(admin: dict = Depends(require_pending_admin)) -> dict:
+    """强制双因素绑定：生成验证器密钥（尚未启用）。"""
+    secret = accounts.generate_totp_secret()
+    store.set_admin_totp(admin["id"], secret, False)
+    return {"secret": secret, "uri": accounts.totp_uri(secret, admin.get("username") or "")}
+
+
+@app.post("/api/admin/account/2fa/enable")
+def admin_enable_2fa(
+    payload: TotpCode, request: Request, admin: dict = Depends(require_pending_admin)
+) -> dict:
+    """校验动态验证码后启用管理员双因素，并完成当前待验证会话。"""
+    secret = admin.get("totp_secret") or ""
+    if not secret:
+        raise HTTPException(status_code=400, detail="请先生成验证器密钥")
+    if not accounts.verify_totp(secret, payload.code):
+        raise HTTPException(status_code=400, detail="验证码不正确")
+    store.set_admin_totp(admin["id"], secret, True)
+    store.mark_admin_session_verified(request.cookies.get(ADMIN_SESSION_COOKIE))
+    store.touch_admin_login(admin["id"])
+    fresh = store.get_admin(admin["id"]) or admin
+    return {"ok": True, "totp_enabled": True, "admin": _public_admin(fresh)}
 
 
 @app.get("/api/admin/me")
@@ -4033,6 +4111,26 @@ def admin_system_backups(limit: int = 100, admin: dict = Depends(current_admin))
     return {"items": store.list_backups(limit=limit)}
 
 
+@app.get("/api/admin/security/locked")
+def admin_security_locked(admin: dict = Depends(current_admin)) -> dict:
+    """当前处于锁定状态的用户与管理员账户。"""
+    return {"items": store.list_locked_accounts(limit=200)}
+
+
+@app.post("/api/admin/security/unlock")
+def admin_security_unlock(
+    payload: AdminUnlockRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    """管理员解锁被登录失败锁定的账户。"""
+    kind = (payload.kind or "").strip().lower()
+    if kind not in {"user", "admin"}:
+        raise HTTPException(status_code=400, detail="kind 必须为 user 或 admin")
+    if not store.unlock_account(kind, payload.id):
+        raise HTTPException(status_code=404, detail="账户不存在")
+    _audit(admin, "security.unlock", target=f"{kind}:{payload.id}", detail="管理员解锁账户")
+    return {"ok": True, "kind": kind, "id": int(payload.id)}
+
+
 @app.get("/api/admin/admins")
 def admin_list(admin: dict = Depends(current_admin)) -> dict:
     return {"items": [_public_admin(item) for item in store.list_admins()]}
@@ -4049,7 +4147,7 @@ def admin_create(payload: AdminCreateRequest, admin: dict = Depends(current_admi
             username, payload.password, name=(payload.name or "").strip()
         )
     except accounts.AccountError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     _audit(admin, "admin.create", target=str(created.get("id")), detail=f"username={username}")
     return {"ok": True, "admin": _public_admin(created)}
 
@@ -4082,7 +4180,7 @@ def admin_reset_admin_password(
     try:
         accounts.set_admin_password(admin_id, payload.password or "")
     except accounts.AccountError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     store.delete_admin_sessions(admin_id)
     _audit(
         admin, "admin.reset_password", target=str(admin_id),
@@ -4232,7 +4330,7 @@ def admin_reset_password(
     try:
         accounts.set_username_password(user_id, username, payload.password or "")
     except accounts.AccountError as error:
-        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+        raise _account_error(error) from error
     store.delete_user_sessions(user_id)
     _audit(admin, "user.reset_password", target=str(user_id), detail=f"username={username}")
     return {"ok": True}

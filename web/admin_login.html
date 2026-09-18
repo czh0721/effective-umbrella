@@ -19,19 +19,34 @@
         <div class="sub">仅限管理员账号访问</div>
       </div>
 
-      <div class="field">
-        <label>用户名</label>
-        <input id="username" autocomplete="username" placeholder="管理员用户名" />
+      <div id="loginFields">
+        <div class="field">
+          <label>用户名</label>
+          <input id="username" autocomplete="username" placeholder="管理员用户名" />
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input id="password" type="password" autocomplete="current-password" placeholder="密码" />
+        </div>
+        <div class="field" id="codeField" style="display:none">
+          <label>动态验证码</label>
+          <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码" />
+        </div>
+        <button class="btn primary wide" id="submit" style="margin-top:4px">登 录</button>
       </div>
-      <div class="field">
-        <label>密码</label>
-        <input id="password" type="password" autocomplete="current-password" placeholder="密码" />
+
+      <div id="setupPanel" style="display:none">
+        <div class="sub" style="text-align:center;line-height:1.7;margin-bottom:12px">平台要求管理员启用双因素认证。请在验证器 App 中手动添加以下密钥，再填写 6 位动态验证码完成绑定。</div>
+        <div class="field">
+          <label>验证器密钥</label>
+          <input id="setupSecret" readonly />
+        </div>
+        <div class="field">
+          <label>动态验证码</label>
+          <input id="setupCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码" />
+        </div>
+        <button class="btn primary wide" id="setupSubmit" style="margin-top:4px">完成绑定</button>
       </div>
-      <div class="field" id="codeField" style="display:none">
-        <label>动态验证码</label>
-        <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6 位验证码" />
-      </div>
-      <button class="btn primary wide" id="submit" style="margin-top:4px">登 录</button>
 
       <div class="hint" id="msg" style="text-align:center;margin-top:12px;color:var(--red)"></div>
       <p class="mini" style="text-align:center;line-height:1.7;margin-top:16px">
@@ -67,6 +82,10 @@
           msg.style.color = "";
           return;
         }
+        if (data.totp_setup_required) {
+          await showSetup();
+          return;
+        }
         window.location.href = "/admin";
       } catch (error) {
         msg.textContent = error.message;
@@ -74,6 +93,38 @@
         submit.disabled = false;
       }
     };
+
+    async function showSetup() {
+      try {
+        const data = await api("/api/admin/account/2fa/setup", { method: "POST" });
+        $("setupSecret").value = data.secret;
+        $("loginFields").style.display = "none";
+        $("setupPanel").style.display = "";
+        msg.textContent = "请先完成双因素绑定";
+        msg.style.color = "";
+        $("setupCode").focus();
+      } catch (error) {
+        msg.textContent = error.message;
+      }
+    }
+
+    $("setupSubmit").onclick = async () => {
+      const code = $("setupCode").value.trim();
+      if (code.length !== 6) { msg.textContent = "请输入 6 位动态验证码"; return; }
+      $("setupSubmit").disabled = true;
+      try {
+        await api("/api/admin/account/2fa/enable", {
+          method: "POST",
+          body: JSON.stringify({ code }),
+        });
+        window.location.href = "/admin";
+      } catch (error) {
+        msg.textContent = error.message;
+      } finally {
+        $("setupSubmit").disabled = false;
+      }
+    };
+    $("setupCode").addEventListener("keydown", (event) => { if (event.key === "Enter") $("setupSubmit").click(); });
 
     $("password").addEventListener("keydown", (event) => { if (event.key === "Enter") submit.click(); });
     $("username").addEventListener("keydown", (event) => { if (event.key === "Enter") submit.click(); });

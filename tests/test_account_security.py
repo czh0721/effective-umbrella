@@ -20,7 +20,7 @@ from ex_persona.webapp import WEB_DIR, _distill_error_info, app  # noqa: E402
 class TotpTwoFactorTest(unittest.TestCase):
     def _account(self, client):
         username = f"totp-{uuid.uuid4().hex[:8]}"
-        password = "password123"
+        password = "Password123!"
         response = client.post(
             "/api/auth/register", json={"username": username, "password": password}
         )
@@ -91,7 +91,7 @@ class RecoveryRequestTest(unittest.TestCase):
 
             username = f"rec-{uuid.uuid4().hex[:8]}"
             client.post(
-                "/api/auth/register", json={"username": username, "password": "password123"}
+                "/api/auth/register", json={"username": username, "password": "Password123!"}
             )
             known = client.post(
                 "/api/auth/recover",
@@ -100,10 +100,10 @@ class RecoveryRequestTest(unittest.TestCase):
             self.assertEqual(known.status_code, 200, known.text)
 
         admin_name = f"adm-{uuid.uuid4().hex[:8]}"
-        accounts.create_admin(admin_name, "password123")
+        accounts.create_admin(admin_name, "Password123!")
         with TestClient(app) as client:
             login = client.post(
-                "/api/admin/auth/login", json={"username": admin_name, "password": "password123"}
+                "/api/admin/auth/login", json={"username": admin_name, "password": "Password123!"}
             )
             self.assertEqual(login.status_code, 200, login.text)
             listing = client.get("/api/admin/recovery")
@@ -129,7 +129,7 @@ class TwoFactorSetupContractTest(unittest.TestCase):
             username = f"post-{uuid.uuid4().hex[:8]}"
             client.post(
                 "/api/auth/register",
-                json={"username": username, "password": "password123"},
+                json={"username": username, "password": "Password123!"},
             )
             self.assertEqual(client.get("/api/account/2fa/setup").status_code, 405)
 
@@ -164,6 +164,154 @@ class DistillErrorInfoTest(unittest.TestCase):
         kind, hint = _distill_error_info(PlatformCapped("今日额度已用尽"))
         self.assertEqual(kind, "platform_quota")
         self.assertTrue(hint)
+
+
+class PasswordPolicyTest(unittest.TestCase):
+    def test_strength_rules(self):
+        accounts.validate_password_strength("Abcdefg1!x", "someone")
+        for bad, reason in [
+            ("Ab1!short", "至少"),
+            ("alllowercase1!", "大写字母"),
+            ("ALLUPPERCASE1!", "小写字母"),
+            ("NoDigitsHere!!", "数字"),
+            ("NoSymbols12345", "符号"),
+            ("A" * 129 + "1!", "最多"),
+        ]:
+            with self.assertRaises(accounts.AccountError, msg=bad) as ctx:
+                accounts.validate_password_strength(bad, "someone")
+            self.assertIn(reason, ctx.exception.message)
+
+    def test_rejects_weak_password(self):
+        result = accounts.check_password_strength("Qwerty123", "someone")
+        self.assertTrue(any("弱密码" in item for item in result["problems"]))
+
+    def test_rejects_username_inside_password(self):
+        with self.assertRaises(accounts.AccountError) as ctx:
+            accounts.validate_password_strength("Xxalice99!Zz", "alice")
+        self.assertIn("用户名", ctx.exception.message)
+
+    def test_check_password_strength_reports_problems(self):
+        result = accounts.check_password_strength("weak", "alice")
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["problems"])
+
+    def test_register_rejects_weak_password(self):
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/auth/register",
+                json={"username": f"pw-{uuid.uuid4().hex[:8]}", "password": "password123"},
+            )
+            self.assertEqual(response.status_code, 400, response.text)
+
+
+class LoginLockoutTest(unittest.TestCase):
+    def _register(self, client):
+        username = f"lock-{uuid.uuid4().hex[:8]}"
+        response = client.post(
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return username
+
+    def _fail_five_times(self, client, username):
+        last = None
+        for _ in range(5):
+            last = client.post(
+                "/api/auth/login", json={"username": username, "password": "WrongPass1!"}
+            )
+        return last
+
+    def test_five_failures_lock_even_with_correct_password(self):
+        with TestClient(app) as client:
+            username = self._register(client)
+            client.post("/api/auth/logout")
+            last = self._fail_five_times(client, username)
+            self.assertEqual(last.status_code, 429, last.text)
+            self.assertTrue(int(last.headers.get("Retry-After", "0")) > 0)
+
+            blocked = client.post(
+                "/api/auth/login", json={"username": username, "password": "Password123!"}
+            )
+            self.assertEqual(blocked.status_code, 429, blocked.text)
+
+    def test_admin_can_unlock_account(self):
+        admin_name = f"unlock-{uuid.uuid4().hex[:8]}"
+        accounts.create_admin(admin_name, "Password123!")
+        with TestClient(app) as client:
+            username = self._register(client)
+            client.post("/api/auth/logout")
+            self._fail_five_times(client, username)
+
+        with TestClient(app) as admin_client:
+            login = admin_client.post(
+                "/api/admin/auth/login", json={"username": admin_name, "password": "Password123!"}
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            locked = admin_client.get("/api/admin/security/locked").json()["items"]
+            target = [item for item in locked if item["username"] == username]
+            self.assertTrue(target)
+            unlock = admin_client.post(
+                "/api/admin/security/unlock", json={"kind": "user", "id": target[0]["id"]}
+            )
+            self.assertEqual(unlock.status_code, 200, unlock.text)
+
+        with TestClient(app) as client:
+            ok = client.post(
+                "/api/auth/login", json={"username": username, "password": "Password123!"}
+            )
+            self.assertEqual(ok.status_code, 200, ok.text)
+
+
+class AdminForceTotpTest(unittest.TestCase):
+    def setUp(self):
+        store.set_feature_flag("admin_force_totp", 0, "test")
+
+    def tearDown(self):
+        store.set_feature_flag("admin_force_totp", 0, "test")
+
+    def test_force_totp_binding_flow(self):
+        admin_name = f"force-{uuid.uuid4().hex[:8]}"
+        accounts.create_admin(admin_name, "Password123!")
+        store.set_feature_flag("admin_force_totp", 1, "test")
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/admin/auth/login", json={"username": admin_name, "password": "Password123!"}
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            self.assertTrue(login.json().get("totp_setup_required"))
+            self.assertEqual(client.get("/api/admin/summary").status_code, 403)
+
+            setup = client.post("/api/admin/account/2fa/setup")
+            self.assertEqual(setup.status_code, 200, setup.text)
+            secret = setup.json()["secret"]
+            enable = client.post(
+                "/api/admin/account/2fa/enable", json={"code": accounts.totp_code_now(secret)}
+            )
+            self.assertEqual(enable.status_code, 200, enable.text)
+            self.assertEqual(client.get("/api/admin/summary").status_code, 200)
+
+
+class PasswordChangeSessionTest(unittest.TestCase):
+    def test_change_password_invalidates_other_sessions(self):
+        with TestClient(app) as first:
+            username = f"sess-{uuid.uuid4().hex[:8]}"
+            first.post(
+                "/api/auth/register", json={"username": username, "password": "Password123!"}
+            )
+            with TestClient(app) as second:
+                login = second.post(
+                    "/api/auth/login", json={"username": username, "password": "Password123!"}
+                )
+                self.assertEqual(login.status_code, 200, login.text)
+                self.assertEqual(second.get("/api/me").status_code, 200)
+
+                change = first.post(
+                    "/api/account/password",
+                    json={"current": "Password123!", "new": "Newpass123!x"},
+                )
+                self.assertEqual(change.status_code, 200, change.text)
+                self.assertEqual(second.get("/api/me").status_code, 401)
+                self.assertEqual(first.get("/api/me").status_code, 200)
 
 
 if __name__ == "__main__":

@@ -23,9 +23,9 @@ class UnitTest(unittest.TestCase):
 
     def test_register_duplicate(self):
         store.init_db()
-        accounts.register("unit-user", "password123")
+        accounts.register("unit-user", "Password123!")
         with self.assertRaises(accounts.AccountError):
-            accounts.register("unit-user", "password123")
+            accounts.register("unit-user", "Password123!")
 
     def test_short_password_rejected(self):
         with self.assertRaises(accounts.AccountError):
@@ -614,7 +614,7 @@ class PlatformTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         user = response.json()["user"]
@@ -672,7 +672,7 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(client.post("/api/auth/logout").status_code, 200)
             self.assertEqual(client.get("/api/me").status_code, 401)
             relogin = client.post(
-                "/api/auth/login", json={"username": "alice", "password": "password123"}
+                "/api/auth/login", json={"username": "alice", "password": "Password123!"}
             )
             self.assertEqual(relogin.status_code, 200)
 
@@ -1267,7 +1267,7 @@ class PlatformTest(unittest.TestCase):
             self._wait_task(client, task_id)
         with TestClient(app) as other:
             other.post(
-                "/api/auth/register", json={"username": "task-b", "password": "password123"}
+                "/api/auth/register", json={"username": "task-b", "password": "Password123!"}
             )
             self.assertEqual(other.get(f"/api/tasks/{task_id}").status_code, 404)
 
@@ -1279,7 +1279,7 @@ class MemoryTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]

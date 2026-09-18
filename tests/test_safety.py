@@ -155,7 +155,7 @@ class StoreSafetyTest(unittest.TestCase):
 class RouteChatSafetyTest(unittest.TestCase):
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]

@@ -195,16 +195,16 @@ class CreditApiTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
 
     def _admin(self, client, username):
         self._register(client, username)
-        accounts.create_admin(username, "password123")
+        accounts.create_admin(username, "Password123!")
         login = client.post(
-            "/api/admin/auth/login", json={"username": username, "password": "password123"}
+            "/api/admin/auth/login", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(login.status_code, 200, login.text)
         return store.get_admin_by_username(username)
@@ -327,7 +327,7 @@ class BillingPathTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
@@ -583,16 +583,16 @@ class CoinCurrencyTest(unittest.TestCase):
 
     def _register(self, client, username):
         response = client.post(
-            "/api/auth/register", json={"username": username, "password": "password123"}
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["user"]
 
     def _admin(self, client, username):
         self._register(client, username)
-        accounts.create_admin(username, "password123")
+        accounts.create_admin(username, "Password123!")
         login = client.post(
-            "/api/admin/auth/login", json={"username": username, "password": "password123"}
+            "/api/admin/auth/login", json={"username": username, "password": "Password123!"}
         )
         self.assertEqual(login.status_code, 200, login.text)
         return store.get_admin_by_username(username)
