@@ -53,6 +53,7 @@ Updated: 2026-09-18
 
 ## 部署记录
 
-- 提交：待部署
-- 部署时间：待部署
-- DB 备份：待记录
+- 提交：`f9c297a`
+- 部署时间：2026-09-18 14:31（TS `20260918_143117`）
+- DB 备份：`platform_20260918_143117.db`
+- 生产校验：服务 active；`sessions.ip/user_agent`、`admin_alerts.target` 迁移完成；`/health` 200；`/api/admin/users/{id}/sessions`、`/api/admin/system/logs`、`/api/admin/alerts`、`/api/admin/redemption-codes/export` 未登录均 401；日志文件 `/opt/nian/data/logs/nian.log` 已创建。
