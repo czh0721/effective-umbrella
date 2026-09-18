@@ -1,5 +1,6 @@
 """多用户平台后端：账号、人格、素材、模型配置、微信绑定与消息路由。"""
 
+import csv
 import io
 import ipaddress
 import json
@@ -17,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -925,6 +926,21 @@ def _audit(actor: dict, action: str, target: str = "", detail: str = "") -> None
         )
     except Exception:  # noqa: BLE001 - 审计失败不能阻断业务
         log.exception("audit write failed", extra={"event": "audit.error"})
+
+
+def _csv_response(filename: str, header: list[str], rows: list[list]) -> Response:
+    """导出 CSV：统一 UTF-8 BOM，保证 Excel 直接打开不乱码。"""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow(["" if value is None else value for value in row])
+    content = ("\ufeff" + buffer.getvalue()).encode("utf-8")
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _channel_info(user_id: int, persona: dict) -> dict:
@@ -3634,10 +3650,14 @@ def admin_summary(admin: dict = Depends(current_admin)) -> dict:
 
 
 @app.get("/api/admin/dashboard")
-def admin_dashboard_api(days: int = 7, admin: dict = Depends(current_admin)) -> dict:
-    """数据看板：指标卡、趋势与转化漏斗（带短时缓存）。"""
-    if days not in (7, 30, 90):
-        days = max(1, min(int(days), 90))
+def admin_dashboard_api(
+    days: int = 7,
+    refresh: bool = False,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """数据看板聚合；``refresh=1`` 时跳过缓存重新聚合。"""
+    if refresh:
+        store.invalidate_dashboard()
     return store.admin_dashboard(days)
 
 
@@ -3664,6 +3684,44 @@ def admin_users(
         page=page,
         size=size,
     )
+
+
+@app.get("/api/admin/users/export")
+def admin_users_export(
+    q: str = "",
+    status: str = "",
+    min_credits: int | None = None,
+    max_credits: int | None = None,
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    admin: dict = Depends(current_admin),
+) -> Response:
+    """导出用户列表 CSV（UTF-8 BOM）。"""
+    rows = store.export_users(
+        query=q,
+        status=status,
+        min_credits=min_credits,
+        max_credits=max_credits,
+        from_iso=from_date,
+        to_iso=to_date,
+    )
+    header = ["ID", "用户名", "昵称", "状态", "积分", "念念币", "人格数", "标签", "备注", "注册时间"]
+    data = [
+        [
+            row.get("id"),
+            row.get("username"),
+            row.get("nickname"),
+            row.get("status"),
+            row.get("credits"),
+            row.get("coins"),
+            row.get("personas"),
+            row.get("tags"),
+            row.get("note"),
+            row.get("created_at"),
+        ]
+        for row in rows
+    ]
+    return _csv_response("users.csv", header, data)
 
 
 @app.get("/api/admin/users/{user_id}")
@@ -3704,6 +3762,36 @@ def admin_orders(
         query=q, package_id=package_id, from_iso=from_date, to_iso=to_date, limit=limit
     )
     return {"items": items, "revenue": store.orders_revenue(30)}
+
+
+@app.get("/api/admin/orders/export")
+def admin_orders_export(
+    q: str = "",
+    package_id: int | None = None,
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    admin: dict = Depends(current_admin),
+) -> Response:
+    """导出订单列表 CSV（UTF-8 BOM）。"""
+    rows = store.list_orders(
+        query=q, package_id=package_id, from_iso=from_date, to_iso=to_date, limit=5000
+    )
+    header = ["订单号", "用户ID", "用户名", "套餐", "基础积分", "赠送积分", "赠送蒸馏券", "念念币", "下单时间"]
+    data = [
+        [
+            row.get("id"),
+            row.get("user_id"),
+            row.get("username"),
+            row.get("package_name"),
+            row.get("credits"),
+            row.get("bonus_credits"),
+            row.get("bonus_tickets"),
+            row.get("coins"),
+            row.get("created_at"),
+        ]
+        for row in rows
+    ]
+    return _csv_response("orders.csv", header, data)
 
 
 @app.get("/api/admin/orders/revenue")
@@ -4025,8 +4113,60 @@ def admin_resolve_report(report_id: int, admin: dict = Depends(current_admin)) -
 
 
 @app.get("/api/admin/audit")
-def admin_audit(admin: dict = Depends(current_admin)) -> dict:
-    return {"items": store.list_audit(limit=100)}
+def admin_audit(
+    actor: str = "",
+    action: str = "",
+    target: str = "",
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    limit: int = 100,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """审计日志：支持按操作人、动作、目标与时间范围筛选。"""
+    return {
+        "items": store.list_audit(
+            limit=limit,
+            actor=actor,
+            action=action,
+            target=target,
+            from_iso=from_date,
+            to_iso=to_date,
+        )
+    }
+
+
+@app.get("/api/admin/audit/export")
+def admin_audit_export(
+    actor: str = "",
+    action: str = "",
+    target: str = "",
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    admin: dict = Depends(current_admin),
+) -> Response:
+    """导出审计日志 CSV（UTF-8 BOM）。"""
+    rows = store.list_audit(
+        limit=10000,
+        actor=actor,
+        action=action,
+        target=target,
+        from_iso=from_date,
+        to_iso=to_date,
+    )
+    header = ["ID", "操作人", "动作", "对象", "详情", "时间"]
+    data = [
+        [
+            row.get("id"),
+            row.get("actor"),
+            row.get("action"),
+            row.get("target"),
+            row.get("detail"),
+            row.get("created_at"),
+        ]
+        for row in rows
+    ]
+    return _csv_response("audit.csv", header, data)
+
 
 
 @app.get("/api/admin/alerts")

@@ -1041,6 +1041,19 @@ def search_users(
     return {"items": [dict(row) for row in rows], "total": total, "page": page, "size": size}
 
 
+def export_users(**filters) -> list[dict]:
+    """导出用：按同一筛选条件翻页取全量用户（单页上限 100）。"""
+    items: list[dict] = []
+    page = 1
+    while True:
+        payload = search_users(page=page, size=100, **filters)
+        items.extend(payload["items"])
+        if not payload["items"] or len(items) >= payload["total"]:
+            return items
+        page += 1
+
+
+
 def user_overview(user_id: int) -> dict | None:
     """单个用户的后台详情：资料、计数、积分摘要与最近流水。"""
     _ensure()
@@ -1161,7 +1174,7 @@ def list_orders(
         rows = conn.execute(
             "SELECT o.*, u.username FROM orders o LEFT JOIN users u ON u.id = o.user_id"
             f"{clause} ORDER BY o.id DESC LIMIT ?",
-            [*params, max(1, min(int(limit), 500))],
+            [*params, max(1, min(int(limit), 5000))],
         ).fetchall()
     return [dict(row) for row in rows]
 

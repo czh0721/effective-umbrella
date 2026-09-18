@@ -36,7 +36,7 @@
 .nav-toggle, .side-close { display: none; }
 .nav-scrim { display: none; }
 
-.admin-nav { display: flex; flex-direction: column; gap: 3px; }
+.admin-nav { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .admin-nav .label {
   font-size: 10.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--text-3); padding: 14px 12px 6px;
@@ -337,13 +337,15 @@
 
   .admin-side {
     display: flex;
-    position: fixed; left: 0; top: 0; height: 100dvh; width: 274px;
+    position: fixed; left: 0; top: 0; height: 100dvh; width: min(288px, 84vw);
     z-index: 70;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom));
     transform: translateX(-104%);
     transition: transform .38s cubic-bezier(0.22, 1, 0.36, 1);
     background: linear-gradient(180deg, rgba(249, 250, 254, 0.98), rgba(240, 242, 249, 0.97));
     border-right: 1px solid rgba(255, 255, 255, 0.75);
     box-shadow: 0 0 70px -24px rgba(40, 30, 90, 0.45);
+    will-change: transform;
   }
   body.nav-open .admin-side { transform: none; }
 
@@ -367,7 +369,7 @@
 
   .nav-toggle {
     display: inline-flex; align-items: center; justify-content: center; flex: none;
-    width: 42px; height: 42px; border-radius: 13px; cursor: pointer;
+    width: 44px; height: 44px; border-radius: 13px; cursor: pointer;
     border: 1px solid var(--hairline); background: rgba(255, 255, 255, 0.78); color: var(--ink);
     transition: transform .2s var(--spring), background .2s;
   }

@@ -368,6 +368,25 @@ def main():
               for i in (audit.json().get("items") or [])),
           audit.text[:120])
 
+    users_csv = client.get("/api/admin/users/export")
+    check("用户导出 CSV 200",
+          users_csv.status_code == 200 and users_csv.content.startswith(b"\xef\xbb\xbf"),
+          f"status={users_csv.status_code}")
+    orders_csv = client.get("/api/admin/orders/export")
+    check("订单导出 CSV 200",
+          orders_csv.status_code == 200 and orders_csv.content.startswith(b"\xef\xbb\xbf"),
+          f"status={orders_csv.status_code}")
+    audit_filtered = client.get("/api/admin/audit", params={"action": "user.set_note"})
+    check("审计按动作筛选",
+          audit_filtered.status_code == 200
+          and all("user.set_note" in str(i.get("action", ""))
+                  for i in (audit_filtered.json().get("items") or [])),
+          audit_filtered.text[:120])
+    dash_forced = client.get("/api/admin/dashboard", params={"days": 7, "refresh": 1})
+    check("看板强制刷新跳过缓存",
+          dash_forced.status_code == 200 and not dash_forced.json().get("cached"),
+          dash_forced.text[:120])
+
     # 17. 通知中心
     notes = client.get("/api/notifications").json()
     check("通知中心有记录", len(notes["items"]) >= 1, f"unread={notes['unread']}")

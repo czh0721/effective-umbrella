@@ -47,7 +47,7 @@
     <main class="admin-main">
       <div class="admin-head">
         <header class="admin-top">
-          <button class="nav-toggle" id="navToggle" aria-label="打开导航"></button>
+          <button class="nav-toggle" id="navToggle" aria-label="打开导航" aria-expanded="false" aria-controls="sideNav"></button>
           <div class="admin-title">
             <h1 id="pageTitle">概览</h1>
             <div class="sub"><span class="live-dot"></span><span id="adminLine">正在同步数据…</span></div>
@@ -129,6 +129,7 @@
                 <input id="userSearch" placeholder="搜索用户名…" autocomplete="off" />
               </label>
               <span class="tag plain" id="userCount"></span>
+              <button class="btn small ghost" data-export="users">导出 CSV</button>
             </div>
             <div class="tbl-wrap">
               <table class="atable">
@@ -179,6 +180,7 @@
                 <input id="orderSearch" placeholder="搜索用户名 / 套餐名…" autocomplete="off" />
               </label>
               <span class="tag plain" id="orderCount"></span>
+              <button class="btn small ghost" data-export="orders">导出 CSV</button>
             </div>
             <div class="tbl-wrap">
               <table class="atable">
@@ -247,6 +249,7 @@
                 <span id="auditSearchIcon"></span>
                 <input id="auditSearch" placeholder="搜索操作人 / 对象 / 详情…" autocomplete="off" />
               </label>
+              <button class="btn small ghost" data-export="audit">导出 CSV</button>
             </div>
             <div id="auditList"></div>
           </div>
@@ -1305,7 +1308,7 @@
     }
 
     /* --------------------------------------------------------------- load */
-    async function loadAll() {
+    async function loadAll(force) {
       if (state.loading) { state.pendingReload = true; return; }
       state.loading = true;
       state.pendingReload = false;
@@ -1317,7 +1320,7 @@
           api("/api/admin/audit"), api("/api/metrics"), api("/health"),
           api("/api/admin/platform"), api("/api/admin/credits"),
           api("/api/admin/redemption-codes?limit=200"), api("/api/admin/recovery"),
-          api("/api/admin/orders?limit=200"), api("/api/admin/dashboard?days=30"),
+          api("/api/admin/orders?limit=200"), api("/api/admin/dashboard?days=30" + (force ? "&refresh=1" : "")),
           api("/api/admin/content/personas?limit=200"), api("/api/admin/content/moments?limit=200"),
           api("/api/admin/announcements"), api("/api/admin/admins"),
           api("/api/admin/system/flags"), api("/api/admin/system/bindings"),
@@ -1366,8 +1369,20 @@
     }
 
     /* ---------------------------------------------------------- navigation */
-    function openNav() { document.body.classList.add("nav-open"); }
-    function closeNav() { document.body.classList.remove("nav-open"); }
+    function openNav() {
+      document.body.classList.add("nav-open");
+      const toggle = document.querySelector("#navToggle");
+      if (toggle) toggle.setAttribute("aria-expanded", "true");
+      const first = document.querySelector("#sideNav button");
+      if (first && window.matchMedia("(max-width: 900px)").matches) first.focus({ preventScroll: true });
+    }
+    function closeNav() {
+      const wasOpen = document.body.classList.contains("nav-open");
+      document.body.classList.remove("nav-open");
+      const toggle = document.querySelector("#navToggle");
+      if (toggle) toggle.setAttribute("aria-expanded", "false");
+      if (wasOpen && window.matchMedia("(max-width: 900px)").matches) toggle && toggle.focus({ preventScroll: true });
+    }
 
     function mountNav() {
       $("sideNav").querySelectorAll("button").forEach((btn) => {
@@ -1383,7 +1398,40 @@
       $("contentSearchIcon").innerHTML = icon("search");
     }
 
+    async function downloadCsv(path) {
+      const response = await fetch(path, { credentials: "same-origin" });
+      if (response.status === 401) { window.location.href = "/admin/login"; return; }
+      if (!response.ok) { toast("导出失败（" + response.status + "）"); return; }
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const matched = disposition.match(/filename="?([^";]+)"?/);
+      const name = matched ? matched[1] : "export.csv";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast("已导出 " + name);
+    }
+
     document.addEventListener("click", async (event) => {
+      const exportButton = event.target.closest("[data-export]");
+      if (exportButton) {
+        const kind = exportButton.dataset.export;
+        const params = new URLSearchParams();
+        if (kind === "users" && state.userQuery.trim()) params.set("q", state.userQuery.trim());
+        if (kind === "orders" && state.orderQuery.trim()) params.set("q", state.orderQuery.trim());
+        if (kind === "audit" && state.auditAction && state.auditAction !== "all") params.set("action", state.auditAction);
+        const suffix = params.toString() ? "?" + params.toString() : "";
+        exportButton.disabled = true;
+        try { await downloadCsv(`/api/admin/${kind}/export${suffix}`); }
+        catch (error) { toast(error.message); }
+        finally { exportButton.disabled = false; }
+        return;
+      }
       const tabButton = event.target.closest("[data-tab]");
       if (tabButton) {
         const name = tabButton.dataset.tab;
@@ -1674,7 +1722,7 @@
     $("navToggle").onclick = openNav;
     $("sideClose").onclick = closeNav;
     $("navScrim").onclick = closeNav;
-    $("refreshBtn").onclick = () => loadAll();
+    $("refreshBtn").onclick = () => loadAll(true);
     $("logoutBtn").onclick = async () => {
       try { await api("/api/admin/auth/logout", { method: "POST" }); } catch (error) { /* 忽略 */ }
       window.location.href = "/admin/login";

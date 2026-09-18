@@ -403,5 +403,62 @@ class AdminManagementTest(unittest.TestCase):
             self.assertEqual(self_reset.status_code, 400)
 
 
+class AdminExportTest(unittest.TestCase):
+    def _admin_client(self, client):
+        username = f"admin-{uuid.uuid4().hex[:8]}"
+        _make_admin(username)
+        _admin_login(client, username)
+        return client
+
+    def test_exports_are_utf8_bom_csv(self):
+        with TestClient(app) as client:
+            _register(client, f"exportee-{uuid.uuid4().hex[:8]}")
+            self._admin_client(client)
+
+            users = client.get("/api/admin/users/export")
+            self.assertEqual(users.status_code, 200, users.text)
+            self.assertIn("text/csv", users.headers["content-type"])
+            self.assertIn("user", users.headers["content-disposition"])
+            self.assertTrue(users.content.startswith(b"\xef\xbb\xbf"))
+            self.assertIn("用户名", users.content.decode("utf-8"))
+
+            audit = client.get("/api/admin/audit/export")
+            self.assertEqual(audit.status_code, 200, audit.text)
+            self.assertTrue(audit.content.startswith(b"\xef\xbb\xbf"))
+
+            orders = client.get("/api/admin/orders/export")
+            self.assertEqual(orders.status_code, 200, orders.text)
+            self.assertTrue(orders.content.startswith(b"\xef\xbb\xbf"))
+
+    def test_audit_filters_and_export_requires_admin(self):
+        with TestClient(app) as client:
+            self.assertEqual(client.get("/api/admin/users/export").status_code, 401)
+            self.assertEqual(client.get("/api/admin/orders/export").status_code, 401)
+            self.assertEqual(client.get("/api/admin/audit/export").status_code, 401)
+
+            user = _register(client, f"auditee-{uuid.uuid4().hex[:8]}")
+            self._admin_client(client)
+            client.post(
+                f"/api/admin/users/{user['id']}/note", json={"note": "重点观察", "tags": "vip"}
+            )
+            filtered = client.get("/api/admin/audit?action=user.set_note")
+            self.assertEqual(filtered.status_code, 200, filtered.text)
+            self.assertTrue(filtered.json()["items"])
+            self.assertTrue(all("user.set_note" in item["action"] for item in filtered.json()["items"]))
+
+    def test_dashboard_refresh_bypasses_cache(self):
+        with TestClient(app) as client:
+            store.invalidate_dashboard()
+            self._admin_client(client)
+            first = client.get("/api/admin/dashboard?days=7")
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertFalse(first.json()["cached"])
+            second = client.get("/api/admin/dashboard?days=7")
+            self.assertTrue(second.json()["cached"])
+            forced = client.get("/api/admin/dashboard?days=7&refresh=1")
+            self.assertEqual(forced.status_code, 200, forced.text)
+            self.assertFalse(forced.json()["cached"])
+
+
 if __name__ == "__main__":
     unittest.main()
