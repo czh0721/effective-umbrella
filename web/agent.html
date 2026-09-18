@@ -657,12 +657,24 @@
     }
 
     /* --------------------------------------------------- 长期记忆 -- */
+    function sheetLoadFailed(host, message, retry) {
+      host.innerHTML = `<div class="hint">加载失败：${escapeHtml(message || "请稍后重试")}</div>
+        <div class="btnrow"><button class="btn ghost wide" id="sheetRetry">重试</button></div>`;
+      const button = host.querySelector("#sheetRetry");
+      if (button) button.onclick = retry;
+    }
     function openMemoryList() {
       openSheet("长期记忆", "按聊天对象隔离，各自一份", '<div id="memBox"></div>', async (body) => {
         const box = body.querySelector("#memBox");
-        box.innerHTML = skeletonCards(2);
         const render = async () => {
-          const data = await api(`/api/personas/${personaId}/memories`);
+          box.innerHTML = skeletonCards(2);
+          let data;
+          try {
+            data = await api(`/api/personas/${personaId}/memories`);
+          } catch (error) {
+            sheetLoadFailed(box, error.message, render);
+            return;
+          }
           if (!data.enabled) { box.innerHTML = '<div class="hint">长期记忆已在「模型与记忆」里关闭。</div>'; return; }
           if (!data.contacts.length) { box.innerHTML = '<div class="hint">还没有聊天对象。收到微信消息后，会自动为对方积累记忆。</div>'; return; }
           box.innerHTML = data.contacts.map((c) => `<div class="g-row click" data-c="${escapeHtml(c.contact_key)}">
@@ -682,7 +694,13 @@
         const host = body.querySelector("#memItems");
         const draw = async () => {
           host.innerHTML = skeletonCards(2);
-          const data = await api(`/api/personas/${personaId}/memories?contact=${encodeURIComponent(contact)}`);
+          let data;
+          try {
+            data = await api(`/api/personas/${personaId}/memories?contact=${encodeURIComponent(contact)}`);
+          } catch (error) {
+            sheetLoadFailed(host, error.message, draw);
+            return;
+          }
           const items = data.memories || [];
           const head = `<div class="btnrow" style="margin-bottom:10px">
             <button class="btn small ghost" id="memRename">重命名</button>

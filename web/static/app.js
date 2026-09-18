@@ -142,6 +142,13 @@ function animateCounts(root = document) {
 }
 
 /* ----------------------------------------------------- starfield (环星) -- */
+let ambientPaused = false;
+function setAmbientPaused(paused) {
+  const next = Boolean(paused);
+  if (next === ambientPaused) return;
+  ambientPaused = next;
+  document.documentElement.classList.toggle("ambient-paused", ambientPaused);
+}
 function mountStarfield() {
   if (prefersReduced() || document.querySelector(".starfield")) return;
   const canvas = document.createElement("canvas");
@@ -211,6 +218,7 @@ function mountStarfield() {
 
   function frame(now) {
     raf = requestAnimationFrame(frame);
+    if (ambientPaused) { last = 0; return; }
     if (now - renderAt < 32) return;
     const dt = last ? Math.min(now - last, 64) : 32;
     last = now;
@@ -379,7 +387,10 @@ function focusFirst(mask) {
 
 function focusableItems(mask) {
   const selector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-  return Array.prototype.filter.call(mask.querySelectorAll(selector), (el) => !el.disabled && el.offsetParent !== null);
+  return Array.prototype.filter.call(
+    mask.querySelectorAll(selector),
+    (el) => !el.disabled && el.offsetParent !== null && !el.hasAttribute("data-skip-focus"),
+  );
 }
 
 function trapFocus(mask, event) {
@@ -420,8 +431,13 @@ function closeModal(mask) {
 }
 
 function syncScrollLock() {
-  const open = Array.prototype.some.call(document.querySelectorAll(".modal-mask"), (m) => !m.dataset.closing);
-  document.body.style.overflow = open ? "hidden" : "";
+  const masks = Array.prototype.filter.call(document.querySelectorAll(".modal-mask"), (m) => !m.dataset.closing);
+  document.body.style.overflow = masks.length ? "hidden" : "";
+  // 只要还开着浮层就暂停背景动画（环星 + 极光漂移），否则 backdrop-filter 每帧
+  // 都要对被动画改写的背景重新取景模糊，滚动时会明显掉帧。
+  setAmbientPaused(masks.length > 0);
+  // 只有最上层的浮层需要背景模糊；下层被完全遮住，关掉可省掉一层全屏合成。
+  masks.forEach((mask, index) => mask.classList.toggle("under", index < masks.length - 1));
 }
 
 function enableSheetDrag(mask) {
@@ -491,10 +507,14 @@ function openSheet(title, sub, bodyHtml, onMount) {
   mask.setAttribute("aria-modal", "true");
   mask.setAttribute("aria-label", title || "操作面板");
   mask._lastFocus = document.activeElement;
+  const backIcon = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>';
   mask.innerHTML = `<div class="modal">
-    <div class="sheet-handle"></div>
-    ${title ? `<h3>${escapeHtml(title)}</h3>` : ""}
-    ${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}
+    <div class="sheet-head">
+      <div class="sheet-handle"></div>
+      <button class="icon-btn sheet-back" id="sheetBack" aria-label="返回" data-skip-focus>${backIcon}</button>
+      ${title ? `<h3>${escapeHtml(title)}</h3>` : ""}
+      ${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ""}
+    </div>
     <div class="modal-body stagger">${bodyHtml}</div>
     <div class="btnrow"><button class="btn ghost wide" id="sheetCancel">取消</button></div>
   </div>`;
@@ -502,7 +522,10 @@ function openSheet(title, sub, bodyHtml, onMount) {
   mask.addEventListener("keydown", (event) => trapFocus(mask, event));
   document.body.appendChild(mask);
   mask.querySelector("#sheetCancel").onclick = () => closeModal(mask);
+  mask.querySelector("#sheetBack").onclick = () => closeModal(mask);
   enableSheetDrag(mask);
+  const modal = mask.querySelector(".modal");
+  if (modal) modal.addEventListener("animationend", () => { modal.style.willChange = "auto"; }, { once: true });
   if (onMount) onMount(mask.querySelector(".modal-body"), mask);
   initSegments(mask);
   focusFirst(mask);
