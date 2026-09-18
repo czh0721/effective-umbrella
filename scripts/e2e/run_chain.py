@@ -306,6 +306,29 @@ def main():
     grant_coin = client.post(f"/api/admin/users/{user_id}/coins", json={"delta": 10, "reason": "e2e"})
     check("后台加念念币 200", grant_coin.status_code == 200, grant_coin.text[:120])
 
+    # 16.5 后台：看板 / 订单 / 用户详情
+    dash = client.get("/api/admin/dashboard?days=7")
+    check("后台看板 200", dash.status_code == 200, dash.text[:120])
+    if dash.status_code == 200:
+        dash_data = dash.json()
+        check("看板趋势 7 天", len(dash_data.get("trend") or []) == 7,
+              str(len(dash_data.get("trend") or [])))
+        check("看板含转化漏斗", "paying" in (dash_data.get("funnel") or {}),
+              str(dash_data.get("funnel"))[:80])
+    orders = client.get("/api/admin/orders")
+    check("后台订单列表 200", orders.status_code == 200, orders.text[:120])
+    if orders.status_code == 200:
+        order_items = orders.json().get("items") or []
+        check("订单含本次购买", any(o.get("user_id") == user_id for o in order_items),
+              f"n={len(order_items)}")
+        check("营收汇总非负", (orders.json().get("revenue") or {}).get("coins", -1) >= 0)
+    detail = client.get(f"/api/admin/users/{user_id}")
+    check("后台用户详情 200",
+          detail.status_code == 200 and detail.json().get("user", {}).get("id") == user_id,
+          detail.text[:120])
+    note = client.post(f"/api/admin/users/{user_id}/note", json={"note": "e2e 备注", "tags": "e2e"})
+    check("后台写用户备注 200", note.status_code == 200, note.text[:120])
+
     # 17. 通知中心
     notes = client.get("/api/notifications").json()
     check("通知中心有记录", len(notes["items"]) >= 1, f"unread={notes['unread']}")

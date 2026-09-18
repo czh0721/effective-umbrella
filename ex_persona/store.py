@@ -9,8 +9,11 @@ import os
 import secrets
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from . import clock
 
 _lock = threading.RLock()
 _initialized = False
@@ -387,6 +390,39 @@ CREATE TABLE IF NOT EXISTS distill_ticket_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_distill_ticket_ledger_user
     ON distill_ticket_ledger(user_id, id);
+-- 后台扩展：购买订单、运营公告与功能开关。
+CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    package_id INTEGER NOT NULL,
+    package_name TEXT NOT NULL DEFAULT '',
+    credits INTEGER NOT NULL DEFAULT 0,
+    bonus_credits INTEGER NOT NULL DEFAULT 0,
+    bonus_tickets INTEGER NOT NULL DEFAULT 0,
+    coins INTEGER NOT NULL DEFAULT 0,
+    idem TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at);
+CREATE TABLE IF NOT EXISTS announcements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    audience TEXT NOT NULL DEFAULT 'all',
+    starts_at TEXT NOT NULL DEFAULT '',
+    ends_at TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    admin_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS feature_flags (
+    key TEXT PRIMARY KEY,
+    value INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL DEFAULT ''
+);
 """
 
 _PERSONA_COLUMNS = {
@@ -417,7 +453,12 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "status": "TEXT NOT NULL DEFAULT 'active'",
         "totp_secret": "TEXT NOT NULL DEFAULT ''",
         "totp_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "note": "TEXT NOT NULL DEFAULT ''",
+        "tags": "TEXT NOT NULL DEFAULT ''",
+        "status_reason": "TEXT NOT NULL DEFAULT ''",
+        "disabled_at": "TEXT NOT NULL DEFAULT ''",
     },
+    "moments": {"hidden": "INTEGER NOT NULL DEFAULT 0"},
     "credit_packages": {
         "coins": "INTEGER NOT NULL DEFAULT 0",
         "validity_days": "INTEGER NOT NULL DEFAULT 30",
@@ -558,6 +599,7 @@ def init_db() -> None:
                 )
             _migrate_credit_expiry(conn)
             _migrate_admin_split(conn)
+            _migrate_admin_console(conn)
         _initialized = True
 
 
@@ -594,6 +636,13 @@ def _migrate_admin_split(conn: sqlite3.Connection) -> None:
             )
         conn.execute("UPDATE users SET role = 'user' WHERE id = ?", (row["id"],))
     _meta_set(conn, "admin_split_migrated", "1")
+
+
+def _migrate_admin_console(conn: sqlite3.Connection) -> None:
+    """后台扩展：建表与补列由 ``SCHEMA`` / ``_MIGRATIONS`` 幂等完成，这里登记一次性标记。"""
+    if _meta_get(conn, "admin_console_migrated") == "1":
+        return
+    _meta_set(conn, "admin_console_migrated", "1")
 
 
 def _migrate_credit_expiry(conn: sqlite3.Connection) -> None:
@@ -769,6 +818,373 @@ def admin_insights() -> dict:
         }
 
 
+# --------------------------------------------------------------------------- #
+# 后台扩展：数据看板 / 用户检索 / 订单
+# --------------------------------------------------------------------------- #
+
+_DASHBOARD_CACHE: dict[int, tuple[float, dict]] = {}
+_DASHBOARD_LOCK = threading.Lock()
+
+
+def _dashboard_ttl() -> float:
+    raw = os.getenv("PERSONA_DASHBOARD_CACHE_TTL")
+    if raw is None:
+        return 60.0
+    try:
+        return max(float(raw), 0.0)
+    except (TypeError, ValueError):
+        return 60.0
+
+
+def invalidate_dashboard() -> None:
+    """清空看板缓存，测试与写操作后可调用。"""
+    with _DASHBOARD_LOCK:
+        _DASHBOARD_CACHE.clear()
+
+
+def _day_start_utc(days_ago: int = 0) -> str:
+    """本地时区某一天的 00:00 对应的 UTC ISO 时间戳。"""
+    moment = clock.now_local() - timedelta(days=days_ago)
+    start = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).isoformat()
+
+
+def _local_window(days_ago: int) -> tuple[str, str]:
+    moment = clock.now_local()
+    start = (moment - timedelta(days=days_ago)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = start + timedelta(days=1)
+    return (
+        start.astimezone(timezone.utc).isoformat(),
+        end.astimezone(timezone.utc).isoformat(),
+    )
+
+
+def dashboard_kpis() -> dict:
+    """数据看板指标卡：用户、活跃、人格、对话、消耗与待处理举报。"""
+    _ensure()
+    day = _day_start_utc()
+    with connect() as conn:
+        def scalar(sql: str, params: tuple = ()) -> int:
+            row = conn.execute(sql, params).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        return {
+            "total_users": scalar("SELECT COUNT(*) FROM users"),
+            "new_users_today": scalar(
+                "SELECT COUNT(*) FROM users WHERE created_at >= ?", (day,)
+            ),
+            "active_today": scalar(
+                "SELECT COUNT(DISTINCT user_id) FROM chat_turns WHERE created_at >= ?",
+                (day,),
+            ),
+            "total_personas": scalar("SELECT COUNT(*) FROM personas"),
+            "turns_today": scalar(
+                "SELECT COUNT(*) FROM chat_turns WHERE created_at >= ?", (day,)
+            ),
+            "credits_spent_today": scalar(
+                "SELECT COALESCE(SUM(-delta), 0) FROM credit_ledger"
+                " WHERE delta < 0 AND reason != ? AND created_at >= ?",
+                (EXPIRE_REASON, day),
+            ),
+            "open_reports": scalar(
+                "SELECT COUNT(*) FROM reports WHERE status = 'open'"
+            ),
+        }
+
+
+def dashboard_trend(days: int = 7) -> list[dict]:
+    """按本地自然日聚合新增、活跃、对话轮次与营收，缺失日期补 0。"""
+    _ensure()
+    span = max(1, min(int(days), 90))
+    with connect() as conn:
+        def scalar(sql: str, params: tuple = ()) -> int:
+            row = conn.execute(sql, params).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        items: list[dict] = []
+        for offset in range(span - 1, -1, -1):
+            start, end = _local_window(offset)
+            window = (start, end)
+            moment = clock.now_local() - timedelta(days=offset)
+            items.append(
+                {
+                    "date": moment.strftime("%Y-%m-%d"),
+                    "new_users": scalar(
+                        "SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?",
+                        window,
+                    ),
+                    "active_users": scalar(
+                        "SELECT COUNT(DISTINCT user_id) FROM chat_turns"
+                        " WHERE created_at >= ? AND created_at < ?",
+                        window,
+                    ),
+                    "turns": scalar(
+                        "SELECT COUNT(*) FROM chat_turns"
+                        " WHERE created_at >= ? AND created_at < ?",
+                        window,
+                    ),
+                    "revenue": scalar(
+                        "SELECT COALESCE(SUM(coins), 0) FROM orders"
+                        " WHERE created_at >= ? AND created_at < ?",
+                        window,
+                    ),
+                }
+            )
+    return items
+
+
+def dashboard_funnel() -> dict:
+    """转化漏斗：注册 → 建人格 → 有对话 → 已付费。"""
+    _ensure()
+    with connect() as conn:
+        def scalar(sql: str) -> int:
+            row = conn.execute(sql).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        registered = scalar("SELECT COUNT(*) FROM users")
+        with_persona = scalar("SELECT COUNT(DISTINCT user_id) FROM personas")
+        with_conversation = scalar("SELECT COUNT(DISTINCT user_id) FROM chat_turns")
+        paying = scalar("SELECT COUNT(DISTINCT user_id) FROM orders")
+
+    def rate(value: int) -> float:
+        return round(value / registered, 4) if registered else 0.0
+
+    return {
+        "registered": registered,
+        "with_persona": with_persona,
+        "with_conversation": with_conversation,
+        "paying": paying,
+        "persona_rate": rate(with_persona),
+        "conversation_rate": rate(with_conversation),
+        "paying_rate": rate(paying),
+    }
+
+
+def admin_dashboard(days: int = 7) -> dict:
+    """看板聚合入口，带时间片缓存；``days`` 取值范围 1–90。"""
+    _ensure()
+    span = max(1, min(int(days), 90))
+    ttl = _dashboard_ttl()
+    now = time.monotonic()
+    with _DASHBOARD_LOCK:
+        cached = _DASHBOARD_CACHE.get(span)
+        if cached is not None and ttl > 0 and now - cached[0] < ttl:
+            data = dict(cached[1])
+            data["cached"] = True
+            return data
+    data = {
+        "kpis": dashboard_kpis(),
+        "trend": dashboard_trend(span),
+        "funnel": dashboard_funnel(),
+    }
+    with _DASHBOARD_LOCK:
+        _DASHBOARD_CACHE[span] = (now, data)
+    return {**data, "cached": False}
+
+
+def search_users(
+    query: str = "",
+    status: str = "",
+    min_credits: int | None = None,
+    max_credits: int | None = None,
+    from_iso: str = "",
+    to_iso: str = "",
+    page: int = 1,
+    size: int = 20,
+) -> dict:
+    """管理员用户检索：用户名/昵称模糊匹配 + 状态/积分/注册时间筛选与分页。"""
+    _ensure()
+    page = max(int(page), 1)
+    size = max(1, min(int(size), 100))
+    where: list[str] = []
+    params: list = []
+    text = (query or "").strip()
+    if text:
+        where.append("(u.username LIKE ? OR u.nickname LIKE ?)")
+        like = f"%{text}%"
+        params.extend([like, like])
+    if (status or "").strip():
+        where.append("u.status = ?")
+        params.append(status.strip())
+    if min_credits is not None:
+        where.append("u.credits >= ?")
+        params.append(int(min_credits))
+    if max_credits is not None:
+        where.append("u.credits <= ?")
+        params.append(int(max_credits))
+    if from_iso:
+        where.append("u.created_at >= ?")
+        params.append(from_iso)
+    if to_iso:
+        where.append("u.created_at < ?")
+        params.append(to_iso)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with connect() as conn:
+        total = int(
+            conn.execute(f"SELECT COUNT(*) FROM users u{clause}", params).fetchone()[0]
+        )
+        rows = conn.execute(
+            "SELECT u.id, u.username, u.nickname, u.status, u.created_at, u.credits,"
+            " u.coins, u.tags, u.note,"
+            " (SELECT COUNT(*) FROM personas p WHERE p.user_id = u.id) AS personas"
+            f" FROM users u{clause} ORDER BY u.id DESC LIMIT ? OFFSET ?",
+            [*params, size, (page - 1) * size],
+        ).fetchall()
+    return {"items": [dict(row) for row in rows], "total": total, "page": page, "size": size}
+
+
+def user_overview(user_id: int) -> dict | None:
+    """单个用户的后台详情：资料、计数、积分摘要与最近流水。"""
+    _ensure()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+        if row is None:
+            return None
+
+        def scalar(sql: str, params: tuple = ()) -> int:
+            result = conn.execute(sql, params).fetchone()
+            return int(result[0]) if result and result[0] is not None else 0
+
+        last_turn = conn.execute(
+            "SELECT created_at FROM chat_turns WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (int(user_id),),
+        ).fetchone()
+        ledger = conn.execute(
+            "SELECT id, delta, balance_after, reason, actor, ref, created_at"
+            " FROM credit_ledger WHERE user_id = ? ORDER BY id DESC LIMIT 20",
+            (int(user_id),),
+        ).fetchall()
+    data = dict(row)
+    data.pop("password_hash", None)
+    data.pop("password_salt", None)
+    data["personas"] = scalar("SELECT COUNT(*) FROM personas WHERE user_id = ?", (user_id,))
+    data["turns"] = scalar("SELECT COUNT(*) FROM chat_turns WHERE user_id = ?", (user_id,))
+    data["memories"] = scalar("SELECT COUNT(*) FROM memories WHERE user_id = ?", (user_id,))
+    data["moments"] = scalar("SELECT COUNT(*) FROM moments WHERE user_id = ?", (user_id,))
+    data["orders"] = scalar("SELECT COUNT(*) FROM orders WHERE user_id = ?", (user_id,))
+    data["last_active_at"] = last_turn["created_at"] if last_turn is not None else ""
+    data["ledger"] = [dict(item) for item in ledger]
+    return data
+
+
+def set_user_note(user_id: int, note: str, tags: str = "") -> None:
+    """写入管理员备注与标签。"""
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE users SET note = ?, tags = ? WHERE id = ?",
+            (note or "", tags or "", int(user_id)),
+        )
+
+
+def _insert_order(
+    conn: sqlite3.Connection,
+    user_id: int,
+    package_id: int,
+    package_name: str,
+    credits: int,
+    bonus_credits: int,
+    bonus_tickets: int,
+    coins: int,
+    idem: str,
+    now: str,
+) -> int:
+    """在给定事务内写入一条订单，返回订单 id。"""
+    cursor = conn.execute(
+        "INSERT INTO orders (user_id, package_id, package_name, credits, bonus_credits,"
+        " bonus_tickets, coins, idem, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            int(user_id), int(package_id), package_name or "", int(credits),
+            int(bonus_credits), int(bonus_tickets), int(coins), idem or "", now,
+        ),
+    )
+    return int(cursor.lastrowid or 0)
+
+
+def record_order(
+    user_id: int,
+    package_id: int,
+    package_name: str,
+    credits: int,
+    bonus_credits: int = 0,
+    bonus_tickets: int = 0,
+    coins: int = 0,
+    idem: str = "",
+) -> dict:
+    """写入一条购买订单（独立事务版本，供非 purchase_package 场景使用）。"""
+    _ensure()
+    now = utcnow()
+    with _lock, connect() as conn:
+        order_id = _insert_order(
+            conn, user_id, package_id, package_name, credits, bonus_credits,
+            bonus_tickets, coins, idem, now,
+        )
+    invalidate_dashboard()
+    return {"id": order_id, "created_at": now}
+
+
+def list_orders(
+    query: str = "",
+    package_id: int | None = None,
+    from_iso: str = "",
+    to_iso: str = "",
+    limit: int = 100,
+) -> list[dict]:
+    """订单列表，按时间倒序，附带用户名。"""
+    _ensure()
+    where: list[str] = []
+    params: list = []
+    text = (query or "").strip()
+    if text:
+        where.append("(u.username LIKE ? OR o.package_name LIKE ?)")
+        like = f"%{text}%"
+        params.extend([like, like])
+    if package_id is not None:
+        where.append("o.package_id = ?")
+        params.append(int(package_id))
+    if from_iso:
+        where.append("o.created_at >= ?")
+        params.append(from_iso)
+    if to_iso:
+        where.append("o.created_at < ?")
+        params.append(to_iso)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT o.*, u.username FROM orders o LEFT JOIN users u ON u.id = o.user_id"
+            f"{clause} ORDER BY o.id DESC LIMIT ?",
+            [*params, max(1, min(int(limit), 500))],
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def orders_revenue(days: int = 30) -> dict:
+    """营收汇总：总量、今日量与逐日趋势。"""
+    _ensure()
+    span = max(1, min(int(days), 90))
+    day = _day_start_utc()
+    with connect() as conn:
+        def scalar(sql: str, params: tuple = ()) -> int:
+            row = conn.execute(sql, params).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+
+        totals = {
+            "orders": scalar("SELECT COUNT(*) FROM orders"),
+            "coins": scalar("SELECT COALESCE(SUM(coins), 0) FROM orders"),
+            "today_orders": scalar(
+                "SELECT COUNT(*) FROM orders WHERE created_at >= ?", (day,)
+            ),
+            "today_coins": scalar(
+                "SELECT COALESCE(SUM(coins), 0) FROM orders WHERE created_at >= ?", (day,)
+            ),
+        }
+    trend = dashboard_trend(span)
+    totals["trend"] = [{"date": item["date"], "revenue": item["revenue"]} for item in trend]
+    return totals
+
+
 def set_user_username(user_id: int, username: str, password_hash: str, password_salt: str) -> None:
     _ensure()
     with _lock, connect() as conn:
@@ -808,12 +1224,24 @@ def set_user_profile(user_id: int, *, nickname: str | None = None, avatar: str |
         conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params)
 
 
-def set_user_status(user_id: int, status: str) -> None:
-    """启用/停用账号。停用只改状态并注销会话，数据与账本全部保留。"""
+def set_user_status(user_id: int, status: str, reason: str = "") -> None:
+    """启用/停用账号。停用只改状态并注销会话，数据与账本全部保留。
+
+    停用时记录原因与停用时间；恢复启用时清空原因与停用时间。
+    """
     _ensure()
     with _lock, connect() as conn:
-        conn.execute("UPDATE users SET status = ? WHERE id = ?", (status or "active", user_id))
-        if status != "active":
+        if (status or "active") == "active":
+            conn.execute(
+                "UPDATE users SET status = 'active', status_reason = '', disabled_at = ''"
+                " WHERE id = ?",
+                (user_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE users SET status = ?, status_reason = ?, disabled_at = ? WHERE id = ?",
+                (status, reason or "", utcnow(), user_id),
+            )
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
 
 
@@ -3460,6 +3888,11 @@ def purchase_package(user_id: int, package_id: int, idem: str = "") -> dict:
             " ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (user_id, gain, new_credits, credit_reason, "", f"package:{package_id}", now),
         )
+        _insert_order(
+            conn, user_id, int(package_id), package["name"], base_gain, bonus_credits,
+            bonus_tickets, price, f"{int(package_id)}:{idem}", now,
+        )
+    invalidate_dashboard()
     return {
         "coins": new_coins,
         "credits": new_credits,

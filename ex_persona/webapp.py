@@ -16,7 +16,7 @@ import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1234,6 +1234,12 @@ class RedeemRequest(BaseModel):
 
 class StatusChange(BaseModel):
     status: str
+    reason: str | None = None
+
+
+class UserNoteRequest(BaseModel):
+    note: str = ""
+    tags: str = ""
 
 
 class RedemptionCodeRequest(BaseModel):
@@ -3567,23 +3573,83 @@ def admin_summary(admin: dict = Depends(current_admin)) -> dict:
     }
 
 
+@app.get("/api/admin/dashboard")
+def admin_dashboard_api(days: int = 7, admin: dict = Depends(current_admin)) -> dict:
+    """数据看板：指标卡、趋势与转化漏斗（带短时缓存）。"""
+    if days not in (7, 30, 90):
+        days = max(1, min(int(days), 90))
+    return store.admin_dashboard(days)
+
+
 @app.get("/api/admin/users")
-def admin_users(admin: dict = Depends(current_admin)) -> dict:
-    rows = store.list_users()
-    return {
-        "items": [
-            {
-                "id": row["id"],
-                "username": row["username"],
-                "status": row.get("status") or "active",
-                "created_at": row.get("created_at"),
-                "personas": store.count_personas_for_user(row["id"]),
-                "credits": int(row.get("credits") or 0),
-                "coins": int(row.get("coins") or 0),
-            }
-            for row in rows
-        ]
-    }
+def admin_users(
+    q: str = "",
+    status: str = "",
+    min_credits: int | None = None,
+    max_credits: int | None = None,
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    page: int = 1,
+    size: int = 20,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """用户列表：支持搜索、状态/积分/注册时间筛选与分页。"""
+    return store.search_users(
+        query=q,
+        status=status,
+        min_credits=min_credits,
+        max_credits=max_credits,
+        from_iso=from_date,
+        to_iso=to_date,
+        page=page,
+        size=size,
+    )
+
+
+@app.get("/api/admin/users/{user_id}")
+def admin_user_detail(user_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """用户详情：资料、计数、最近积分流水。"""
+    detail = store.user_overview(user_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"user": detail}
+
+
+@app.post("/api/admin/users/{user_id}/note")
+def admin_user_note(
+    user_id: int, payload: UserNoteRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    """写入用户备注与标签。"""
+    target = store.get_user(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    note = (payload.note or "").strip()[:2000]
+    tags = (payload.tags or "").strip()[:200]
+    store.set_user_note(user_id, note, tags)
+    _audit(admin, "user.set_note", target=str(user_id), detail=f"tags={tags}")
+    return {"ok": True}
+
+
+@app.get("/api/admin/orders")
+def admin_orders(
+    q: str = "",
+    package_id: int | None = None,
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    limit: int = 100,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """购买订单列表。"""
+    items = store.list_orders(
+        query=q, package_id=package_id, from_iso=from_date, to_iso=to_date, limit=limit
+    )
+    return {"items": items, "revenue": store.orders_revenue(30)}
+
+
+@app.get("/api/admin/orders/revenue")
+def admin_orders_revenue(days: int = 30, admin: dict = Depends(current_admin)) -> dict:
+    """营收汇总与逐日趋势。"""
+    return store.orders_revenue(days)
 
 
 @app.get("/api/admin/reports")
@@ -3644,12 +3710,13 @@ def admin_set_status(
     target = store.get_user(user_id)
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
-    store.set_user_status(user_id, status)
+    reason = (payload.reason or "").strip()[:500]
+    store.set_user_status(user_id, status, reason=reason)
     _audit(
         admin,
         "user.set_status",
         target=str(user_id),
-        detail=f"username={target.get('username')} status={status}",
+        detail=f"username={target.get('username')} status={status} reason={reason}",
     )
     return {"ok": True, "status": status}
 
