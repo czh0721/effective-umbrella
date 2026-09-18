@@ -13,6 +13,13 @@ Updated: 2026-09-18
 - 前端把后台重构为固定侧栏 + 分区面板的玻璃风控制台，复用 `app.css` 设计令牌，
   分区扩展为：概览、用户、内容、计费、运营、举报、系统、管理员。
 
+## 本期范围（用户确认）
+
+- 交付阶段：P0——数据层迁移、看板聚合、用户列表与详情、订单落库、后台布局重构骨架。
+- 内容处置：软删除，朋友圈以 `moments.hidden` 标记，人格以 `personas.status` 标记，均支持恢复。
+- 备份：仅提供备份文件列表只读接口，后端不暴露触发备份的写接口。
+- P1/P2 的接口与数据模型在本设计预留，实现排期在后续迭代。
+
 ## Architecture
 
 ```mermaid
@@ -70,11 +77,11 @@ graph TD
 - 批次：`list_credit_batches(query, from_iso, to_iso, limit)`。
 - 内容：`search_personas(query, status, limit)`、`persona_overview(persona_id)`、
   `set_persona_status(persona_id, status, actor)`、`list_moments(query, from_iso, to_iso, limit)`、
-  `hide_moment(moment_id, actor)`。
+  `set_moment_hidden(moment_id, hidden, actor)`（软删除，支持恢复）。
 - 运营：`create_announcement(...)`、`list_announcements(...)`、`active_announcements(now)`、
   `set_announcement_active(id, active, actor)`、`broadcast_notice(user_ids, title, body, actor)`。
 - 运维：`list_wechat_bindings(limit)`、`list_tasks(status, limit)`、`retry_task(task_id, actor)`、
-  `list_backups()`、`create_backup(actor)`、`get_feature_flags()`、`set_feature_flag(key, value, actor)`。
+  `list_backups()`（只读）、`get_feature_flags()`、`set_feature_flag(key, value, actor)`。
 - 管理员：`list_admins()` 已有，补 `reset_admin_totp(admin_id, actor)`。
 
 ### 接口层 `ex_persona/webapp.py`
@@ -90,9 +97,9 @@ graph TD
 | GET | `/api/admin/users/export` | 用户 CSV 导出 |
 | GET | `/api/admin/content/personas?q=&status=` | 人格列表 |
 | GET | `/api/admin/content/personas/{id}` | 人格详情 |
-| POST | `/api/admin/content/personas/{id}/status` | 停用/启用人格 |
+| POST | `/api/admin/content/personas/{id}/status` | 停用/启用人格（可恢复） |
 | GET | `/api/admin/content/moments?q=&from=&to=` | 朋友圈内容列表 |
-| POST | `/api/admin/content/moments/{id}/hide` | 隐藏内容 |
+| POST | `/api/admin/content/moments/{id}/hidden` | 隐藏/恢复内容（软删除） |
 | GET | `/api/admin/orders?q=&package_id=&from=&to=` | 订单列表 |
 | GET | `/api/admin/orders/export` | 订单 CSV 导出 |
 | GET | `/api/admin/orders/revenue?days=` | 营收汇总 |
@@ -109,8 +116,7 @@ graph TD
 | POST | `/api/admin/system/tasks/{id}/retry` | 重试任务 |
 | GET | `/api/admin/system/flags` | 功能开关 |
 | PUT | `/api/admin/system/flags/{key}` | 切换开关 |
-| GET | `/api/admin/system/backups` | 备份列表 |
-| POST | `/api/admin/system/backups` | 触发备份 |
+| GET | `/api/admin/system/backups` | 备份列表（只读） |
 | GET | `/api/admin/admins` | 管理员列表 |
 | POST | `/api/admin/admins` | 创建管理员 |
 | POST | `/api/admin/admins/{id}/status` | 启停管理员 |
@@ -190,15 +196,16 @@ ALTER TABLE moments ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
 - I5: 看板趋势数据的日期轴连续，缺失日期补 0，且各日聚合与明细表按 `Asia/Shanghai` 日界切分。
 - I6: 所有写操作在当前请求内生成一条 `admin_audit` 记录。
 - I7: 功能开关读取以数据库为准，切换后用户端下一次请求即读到新值。
-- I8: 隐藏朋友圈内容后，用户端朋友圈接口不再返回该条。
+- I8: 隐藏朋友圈内容后，用户端朋友圈接口不再返回该条；恢复后再次可见。
 - I9: CSV 导出内容与同筛选条件的列表接口一致。
+- I10: 软删除操作只改变可见性字段，`moments.content` 与 `personas` 记录保持完整。
 
 ## Error Handling
 
 - 资源不存在：`404`，`detail="目标不存在"`。
 - 参数非法（时间范围倒置、分页越界、积分区间反向）：`400`，返回可读 `detail`。
 - 管理员账号重复：`409`，`detail="管理员已存在"`。
-- 备份触发失败：`500`，`detail="备份失败"`，并写入服务端日志。
+- 恢复不存在或未被隐藏的内容：`404`，`detail="目标不存在"`。
 - 其余沿用现有错误映射；所有异常记录 `admin.console.error` 事件日志。
 
 ## Test Strategy
@@ -215,9 +222,9 @@ ALTER TABLE moments ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0;
 
 ## 实施阶段
 
-- P0 数据层迁移 + 看板聚合 + 用户列表/详情 + 订单落库 + 后台布局重构骨架。
-- P1 内容审核、公告投放、系统运维、管理员与审计筛选。
-- P2 CSV 导出、看板缓存、移动端抽屉、图表与空态打磨。
+- P0（本期交付）：数据层迁移、看板聚合、用户列表与详情、购买订单落库、后台布局重构骨架。
+- P1（后续）：内容审核、公告投放、系统运维、管理员与审计筛选。
+- P2（后续）：CSV 导出、看板缓存、移动端抽屉、图表与空态打磨。
 
 ## References
 
