@@ -50,3 +50,12 @@ Updated: 2026-09-18
 - [x] `tests/test_account_security.py` 新增密码策略 / 锁定 / 强制双因素 / 会话失效测试
 - [x] `scripts/e2e/run_chain.py` 新增弱密码拒绝、锁定与解锁、管理员强制双因素（109/109）
 - [x] 后台 Playwright 渲染探针通过（安全分区）
+
+## 部署记录
+
+- 部署时间戳：`20260918_135629`（提交 `85f59e5`）
+- 数据库备份：`/opt/nian/backups/platform_20260918_135629.db`
+- 生产校验：服务 active；`users`/`admins` 锁定列存在；`users.last_password_change_at` 存在；
+  `schema_meta.account_security_migrated=1`；`feature_flags.admin_force_totp=0`；
+  `/health` 200、`/login` 200、`/admin/login` 200、`/admin` 302；
+  弱密码注册 400、错误登录 401、未登录安全接口 401。
