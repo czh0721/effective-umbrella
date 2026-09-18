@@ -80,14 +80,13 @@ metering.bind(...)          ▼
 
 - `store.PACKAGE_TIERS`：9 个档位，元素为
   `(name, credits, coins, badge, sort, validity_days, bonus_credits, bonus_tickets)`；
-  `DEFAULT_PACKAGES` 由「`ENTRY_PACKAGE` + 9 档」派生，`price_cents = coins × 10`。
-- `store.ENTRY_PACKAGE`：入门体验包，10 念念币 / 1000 积分 / 30 天，与主套餐口径一致。
+  `DEFAULT_PACKAGES` 由 9 档派生，`price_cents = coins × 10`。
 - 定价：`credits = coins × 100`，每轮 20 积分，成本 ¥0.008/轮，毛利 60%。
 - `_migrate_package_tiers(conn)`：以 `schema_meta.package_tiers_v1` 为标记只执行一次；
   按名称 upsert 档位、下架 `LEGACY_PACKAGE_NAMES`（`标准包` / `尊享包`），保留数据与
   历史订单；此后后台改价不会被启动逻辑覆盖。
-- `_migrate_entry_package(conn)`：以 `schema_meta.entry_package_v2` 为标记只执行一次，
-  把「体验包」对齐到 10 念念币 / 1000 积分。
+- `_migrate_retire_entry_package(conn)`：以 `schema_meta.packages_retired_v1` 为标记只
+  执行一次，下架 `RETIRED_PACKAGE_NAMES`（`体验包`）。
 
 ## 测试
 

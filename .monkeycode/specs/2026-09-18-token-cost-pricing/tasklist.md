@@ -21,8 +21,8 @@
       `_migrate_package_tiers`。
 - [x] 新增 `tests/test_package_tiers.py`（档位、60% 毛利、后台修改保留）。
 - [x] e2e 增加套餐板 9 档、旧套餐下架、毛利约 60% 断言。
-- [x] 部署并核对生产套餐板：`体验包` 保留，旧 `标准包` / `尊享包` 下架，9 档 active。
-- [x] 入门体验包对齐为 10 念念币 / 1000 积分 / 30 天（`_migrate_entry_package`）。
+- [x] 部署并核对生产套餐板：旧 `标准包` / `尊享包` 下架，9 档 active。
+- [x] 下架入门体验包（`_migrate_retire_entry_package`，meta `packages_retired_v1`）。
 - [x] 新增 `scripts/cost_probe.py`，在生产用平台模型实测真实 token 与成本。
 
 ## 实测结果（2026-09-18，生产 `deepseek-chat`）

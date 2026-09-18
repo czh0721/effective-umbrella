@@ -62,7 +62,7 @@
 - R13: IF 管理员在后台修改了套餐, then the system shall 在后续启动时保留该修改，不用默认
   值覆盖。
 - R14: The system shall 尊享三档分别附赠 1 / 2 / 3 张蒸馏券。
-- R15: The system shall 让入门体验包与主套餐口径一致，为 10 念念币 / 1000 积分 / 30 天。
+- R15: The system shall 只提供 30/90/365 天各三档套餐，不提供入门体验包。
 
 ## 验收
 

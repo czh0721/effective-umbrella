@@ -17,7 +17,6 @@ class PackageTiersTest(unittest.TestCase):
     def test_tiers_board_active(self):
         packages = store.list_credit_packages(active_only=True)
         names = {item["name"] for item in packages}
-        self.assertIn("体验包", names)
         for name, credits, coins, _badge, _sort, days, _bc, bonus_tickets in store.PACKAGE_TIERS:
             item = next((p for p in packages if p["name"] == name), None)
             self.assertIsNotNone(item, name)
@@ -28,20 +27,25 @@ class PackageTiersTest(unittest.TestCase):
             self.assertEqual(item["price_cents"], coins * 10, name)
         self.assertNotIn("标准包", names)
         self.assertNotIn("尊享包", names)
-        entry = next(p for p in packages if p["name"] == "体验包")
-        self.assertEqual(entry["credits"], 1000)
-        self.assertEqual(entry["coins"], 10)
-        self.assertEqual(entry["validity_days"], 30)
-        self.assertEqual(entry["price_cents"], 100)
 
     def test_tiers_margin_about_60_percent(self):
         cost_per_turn = 0.008
-        for name, credits, coins, _badge, _sort, _days, _bc, _bt in (store.ENTRY_PACKAGE, *store.PACKAGE_TIERS):
+        for name, credits, coins, _badge, _sort, _days, _bc, _bt in store.PACKAGE_TIERS:
             rounds = credits / 20
             cost = rounds * cost_per_turn
             revenue = coins / 10
             margin = 1 - cost / revenue
             self.assertAlmostEqual(margin, 0.6, places=3, msg=name)
+
+    def test_retired_entry_package_deactivated(self):
+        store.upsert_credit_package(None, "体验包", 1000, 100, "", 1, True, coins=10, validity_days=30)
+        with store.connect() as conn:
+            store._meta_set(conn, "packages_retired_v1", "0")
+        store._initialized = False
+        store.init_db()
+        retired = store.list_credit_packages(active_only=False)
+        entry = next(p for p in retired if p["name"] == "体验包")
+        self.assertEqual(entry["active"], 0)
 
     def test_admin_edit_survives_reinit(self):
         item = next(p for p in store.list_credit_packages() if p["name"] == "轻享月卡")
