@@ -556,10 +556,28 @@ def credit_validity_label(days: object) -> str:
         value = DEFAULT_CREDIT_DAYS
     return CREDIT_VALIDITY_LABELS.get(value, f"{value} 天")
 
-DEFAULT_PACKAGES = (
-    ("体验包", 100, 10, "", 1, 30),
-    ("标准包", 1000, 90, "推荐", 2, 90),
-    ("尊享包", 5000, 400, "超值", 3, 365),
+# 现役套餐档位：30/90/365 天各分轻享/标准/尊享三档。
+# 每个元素为 (name, credits, coins, badge, sort, validity_days, bonus_credits, bonus_tickets)。
+# 定价口径：1 元 = 10 念念币，1 念念币 = 100 积分，每轮扣 20 积分（即 ¥0.02/轮），
+# 目标毛利率 60%（上游成本约 ¥0.008/轮）。coins 即念念币售价，price_cents 为人民币分展示价。
+PACKAGE_TIERS = (
+    ("轻享月卡", 4900, 49, "", 11, 30, 0, 0),
+    ("标准月卡", 9900, 99, "推荐", 12, 30, 0, 0),
+    ("尊享月卡", 19900, 199, "超值", 13, 30, 0, 1),
+    ("轻享季卡", 12900, 129, "", 21, 90, 0, 0),
+    ("标准季卡", 25900, 259, "推荐", 22, 90, 0, 0),
+    ("尊享季卡", 49900, 499, "超值", 23, 90, 0, 2),
+    ("轻享年卡", 39900, 399, "", 31, 365, 0, 0),
+    ("标准年卡", 79900, 799, "推荐", 32, 365, 0, 0),
+    ("尊享年卡", 159900, 1599, "超值", 33, 365, 0, 3),
+)
+
+# 被新档位替换的旧跨时长套餐，一次性下架（保留数据与历史订单）。
+LEGACY_PACKAGE_NAMES = ("标准包", "尊享包")
+
+DEFAULT_PACKAGES = (("体验包", 100, 10, "", 1, 30),) + tuple(
+    (name, credits, coins, badge, sort, days)
+    for name, credits, coins, badge, sort, days, _bonus_credits, _bonus_tickets in PACKAGE_TIERS
 )
 
 
@@ -670,6 +688,7 @@ def init_db() -> None:
             _migrate_admin_split(conn)
             _migrate_admin_console(conn)
             _migrate_account_security(conn)
+            _migrate_package_tiers(conn)
             seed_at = utcnow()
             conn.executemany(
                 "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
@@ -748,6 +767,44 @@ def _migrate_credit_expiry(conn: sqlite3.Connection) -> None:
              "credit-expiry-migration", now),
         )
     _meta_set(conn, "credit_expiry_migrated", "1")
+
+
+def _migrate_package_tiers(conn: sqlite3.Connection) -> None:
+    """一次性切换到 30/90/365 天各三档的套餐板（幂等，只执行一次）。
+
+    新档位按 ``PACKAGE_TIERS`` 落库；被替换的旧跨时长套餐仅下架，保留数据与历史订单。
+    用 ``schema_meta`` 标记保证只执行一次，之后管理员在后台的自定义修改不会被覆盖。
+    """
+    if _meta_get(conn, "package_tiers_v1") == "1":
+        return
+    now = utcnow()
+    for name, credits, coins, badge, sort, days, bonus_credits, bonus_tickets in PACKAGE_TIERS:
+        row = conn.execute(
+            "SELECT id FROM credit_packages WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO credit_packages (name, credits, coins, price_cents, badge, sort,"
+                " active, validity_days, bonus_credits, bonus_tickets, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+                (name, int(credits), int(coins), int(coins) * 10, badge, int(sort), int(days),
+                 int(bonus_credits), int(bonus_tickets), now, now),
+            )
+        else:
+            conn.execute(
+                "UPDATE credit_packages SET credits = ?, coins = ?, price_cents = ?, badge = ?,"
+                " sort = ?, active = 1, validity_days = ?, bonus_credits = ?, bonus_tickets = ?,"
+                " updated_at = ? WHERE id = ?",
+                (int(credits), int(coins), int(coins) * 10, badge, int(sort), int(days),
+                 int(bonus_credits), int(bonus_tickets), now, int(row["id"])),
+            )
+    placeholders = ", ".join("?" * len(LEGACY_PACKAGE_NAMES))
+    conn.execute(
+        f"UPDATE credit_packages SET active = 0, updated_at = ?"
+        f" WHERE name IN ({placeholders}) AND active = 1",
+        (now, *LEGACY_PACKAGE_NAMES),
+    )
+    _meta_set(conn, "package_tiers_v1", "1")
 
 
 def _meta_get(conn: sqlite3.Connection, key: str) -> str:
