@@ -45,3 +45,29 @@
 
 - [ ] 7. 检查点
   - 确保所有测试通过,如有疑问请询问用户
+
+---
+
+## P1 实施记录（已完成）
+
+- [x] 内容审核
+  - [x] `store.search_personas` / `persona_overview` / `set_persona_status`（软处置，停用同时摘除激活标记，可恢复）
+  - [x] `store.admin_list_moments` / `set_moment_hidden`（软删除，可恢复）
+  - [x] 用户端 `store.list_moments` 过滤 `hidden = 0`
+  - [x] 接口：`GET /api/admin/content/personas`、`GET/POST /api/admin/content/personas/{id}[/status]`、`GET /api/admin/content/moments`、`POST /api/admin/content/moments/{id}/hidden`
+  - [x] 被停用的人格在桥接回复入口静默不回复，且用户无法自行重新激活
+- [x] 运营投放
+  - [x] `store.create_announcement` / `list_announcements` / `active_announcements` / `set_announcement_active` / `broadcast_notice`
+  - [x] 接口：`GET/POST /api/admin/announcements`、`POST /api/admin/announcements/{id}/active`、`POST /api/admin/notices`
+  - [x] 用户端 `GET /api/announcements`，`app.html` / `settings.html` 顶部展示公告
+- [x] 系统运维
+  - [x] `store.admin_list_bindings` / `admin_list_tasks` / `retry_task` / `list_backups`（只读）/ `get_feature_flags` / `set_feature_flag` / `feature_flag_enabled`
+  - [x] 接口：`/api/admin/system/{health,bindings,tasks,flags,backups}` 与绑定强制下线、任务重试
+  - [x] 三个功能开关缺省开启并即时生效：`moments_auto` 停自动发布、`wechat_login` 停扫码登录、`platform_model` 停平台模型回退
+- [x] 管理员与审计
+  - [x] `store.reset_admin_totp`；审计 `list_audit` 支持操作人/动作/目标/时间筛选
+  - [x] 接口：`GET/POST /api/admin/admins`、`POST /api/admin/admins/{id}/{status,password,totp}`、`GET /api/admin/audit?...`
+  - [x] 管理员列表与创建响应不下发密码/双因素密钥
+- [x] 测试与验证
+  - [x] `tests/test_admin_console.py` 扩至 16 项；全量 375 单测通过；`ruff` 通过；e2e 94/94
+  - [x] Playwright 后台渲染探针覆盖内容/运营/系统/管理员分区，无 JS 报错

@@ -23,12 +23,17 @@
         <button data-tab="overview" class="active"></button>
         <button data-tab="reports"></button>
         <button data-tab="users"></button>
+        <button data-tab="content"></button>
         <button data-tab="orders"></button>
+        <div class="label">运营投放</div>
+        <button data-tab="ops"></button>
         <div class="label">配置</div>
         <button data-tab="credits"></button>
         <div class="label">运维</div>
         <button data-tab="audit"></button>
         <button data-tab="system"></button>
+        <div class="label">权限</div>
+        <button data-tab="admins"></button>
       </nav>
       <div class="side-foot">
         <div class="side-user">
@@ -136,6 +141,28 @@
           </div>
         </section>
 
+        <section class="panel" id="panel-content">
+          <div class="acard">
+            <div class="toolbar">
+              <nav class="segment" id="contentFilter">
+                <button data-kind="personas" class="active">人格</button>
+                <button data-kind="moments">朋友圈</button>
+              </nav>
+              <label class="search" style="flex:1;min-width:180px">
+                <span id="contentSearchIcon"></span>
+                <input id="contentSearch" placeholder="搜索用户 / 名称…" autocomplete="off" />
+              </label>
+              <span class="tag plain" id="contentCount"></span>
+            </div>
+            <div class="tbl-wrap">
+              <table class="atable">
+                <thead id="contentHead"></thead>
+                <tbody id="contentList"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
         <section class="panel" id="panel-orders">
           <div class="kpi-grid" id="orderKpis">
             <div class="kpi skeleton skel-kpi"></div><div class="kpi skeleton skel-kpi"></div>
@@ -161,6 +188,23 @@
                 <tbody id="orderList"></tbody>
               </table>
             </div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-ops">
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="announceHead"></div>
+              <div id="announceForm"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="noticeHead"></div>
+              <div id="noticeForm"></div>
+            </div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="announceListHead"></div>
+            <div id="announceList"></div>
           </div>
         </section>
 
@@ -220,6 +264,42 @@
               <div id="timingList"></div>
             </div>
           </div>
+          <div class="acard">
+            <div class="acard-head" id="flagHead"></div>
+            <div id="flagList"></div>
+          </div>
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="bindingHead"></div>
+              <div id="bindingList"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="backupHead"></div>
+              <div id="backupList"></div>
+            </div>
+          </div>
+          <div class="acard">
+            <div class="acard-head" id="taskHead"></div>
+            <div id="taskList"></div>
+          </div>
+        </section>
+
+        <section class="panel" id="panel-admins">
+          <div class="acard">
+            <div class="toolbar">
+              <span class="tag plain" id="adminCount"></span>
+              <span class="spacer"></span>
+              <button class="btn primary small" id="newAdminBtn">新建管理员</button>
+            </div>
+            <div class="tbl-wrap">
+              <table class="atable">
+                <thead><tr>
+                  <th>管理员</th><th>状态</th><th>双因素</th><th>最近登录</th><th style="text-align:right">操作</th>
+                </tr></thead>
+                <tbody id="adminList"></tbody>
+              </table>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -236,6 +316,13 @@
       "user.grant_coins": "调整念念币", "redemption.create": "生成兑换码",
       "coins.redeem": "兑换念念币", "package.purchase": "购买套餐",
       "user.set_status": "账号状态", "user.set_note": "用户备注",
+      "persona.set_status": "人格状态", "moment.set_hidden": "隐藏内容",
+      "announcement.create": "发布公告", "announcement.set_active": "公告状态",
+      "notice.broadcast": "站内通知", "binding.stop": "强制下线",
+      "task.retry": "重试任务", "flag.set": "功能开关",
+      "redemption.void": "作废兑换码", "admin.create": "创建管理员",
+      "admin.set_status": "管理员状态", "admin.reset_password": "重置管理员密码",
+      "admin.reset_totp": "重置双因素",
     };
     const ACTION_ICON = {
       "report.resolve": "warning", "user.reset_password": "key",
@@ -243,15 +330,25 @@
       "user.grant_coins": "gift", "redemption.create": "key",
       "coins.redeem": "gift", "package.purchase": "store",
       "user.set_status": "user", "user.set_note": "edit",
+      "persona.set_status": "brain", "moment.set_hidden": "eye",
+      "announcement.create": "bell", "announcement.set_active": "bell",
+      "notice.broadcast": "send", "binding.stop": "watch",
+      "task.retry": "refresh", "flag.set": "sliders",
+      "redemption.void": "close", "admin.create": "user",
+      "admin.set_status": "user", "admin.reset_password": "key",
+      "admin.reset_totp": "shield",
     };
     const TABS = [
       { key: "overview", label: "概览", icon: "spark", title: "运营概览" },
       { key: "reports", label: "举报", icon: "warning", title: "举报处理" },
       { key: "users", label: "用户", icon: "user", title: "用户管理" },
+      { key: "content", label: "内容", icon: "moments", title: "内容审核" },
       { key: "orders", label: "订单", icon: "store", title: "购买订单" },
+      { key: "ops", label: "运营投放", icon: "send", title: "公告与通知" },
       { key: "credits", label: "模型与计费", icon: "cpu", title: "模型与计费" },
       { key: "audit", label: "审计", icon: "clock", title: "操作审计" },
       { key: "system", label: "系统", icon: "sliders", title: "系统状态" },
+      { key: "admins", label: "管理员", icon: "shield", title: "管理员与权限" },
     ];
     const TONE = {
       v: { color: "#7c5cff", soft: "linear-gradient(135deg,rgba(124,92,255,.16),rgba(155,123,255,.10))" },
@@ -270,6 +367,9 @@
       platform: null, creditPackages: [], creditTotals: null, coinsTotals: null,
       redemptionItems: [], redemptionStats: null, redemptionFilter: "",
       reportFilter: "all", auditAction: "all", userQuery: "", auditQuery: "",
+      personas: [], moments: [], contentKind: "personas", contentQuery: "",
+      announcements: [], admins: [], flags: {}, bindings: [], backups: [], tasks: [],
+      adminQuery: "",
     };
 
     /* ------------------------------------------------------------ helpers */
@@ -744,6 +844,186 @@
       }
     }
 
+    /* ------------------------------------------------------------ content */
+    const PERSONA_STATUS = { ready: "可用", empty: "未创建", ingested: "已导入", retired: "已告别", disabled: "已停用", distilling: "蒸馏中" };
+
+    function renderContent() {
+      const query = state.contentQuery.trim().toLowerCase();
+      if (state.contentKind === "personas") {
+        $("contentHead").innerHTML = "<tr><th>人格</th><th>所属用户</th><th>状态</th><th>对话</th><th>记忆</th><th>朋友圈</th><th style='text-align:right'>操作</th></tr>";
+        const items = state.personas.filter((item) =>
+          !query || [(item.name), (item.target_name), (item.username)].some((value) => String(value || "").toLowerCase().includes(query)));
+        $("contentCount").textContent = "共 " + state.personas.length + " 个人格";
+        if (!items.length) { $("contentList").innerHTML = `<tr><td colspan="7">${emptyState("没有匹配的人格", "brain")}</td></tr>`; return; }
+        $("contentList").innerHTML = items.map((item) => {
+          const disabled = item.status === "disabled";
+          return `<tr>
+            <td data-label="人格"><b>${escapeHtml(item.name || "未命名")}</b><span class="tag plain">#${escapeHtml(String(item.id))}</span></td>
+            <td data-label="用户">${escapeHtml(item.username || ("用户 #" + item.user_id))}</td>
+            <td data-label="状态"><span class="tag ${disabled ? "open" : "resolved"}">${escapeHtml(PERSONA_STATUS[item.status] || item.status || "-")}</span></td>
+            <td data-label="对话" class="num">${escapeHtml(String(item.turn_count || 0))}</td>
+            <td data-label="记忆" class="num">${escapeHtml(String(item.memory_count || 0))}</td>
+            <td data-label="朋友圈" class="num">${escapeHtml(String(item.moment_count || 0))}</td>
+            <td data-label="操作" style="text-align:right">
+              <button class="btn small ${disabled ? "primary" : "ghost"}" data-persona-status="${escapeHtml(String(item.id))}" data-current="${escapeHtml(item.status || "")}">${disabled ? "恢复" : "停用"}</button>
+            </td>
+          </tr>`;
+        }).join("");
+        return;
+      }
+      $("contentHead").innerHTML = "<tr><th>内容</th><th>所属用户</th><th>人格</th><th>互动</th><th>时间</th><th style='text-align:right'>操作</th></tr>";
+      const moments = state.moments.filter((item) =>
+        !query || [(item.content), (item.username), (item.persona_name)].some((value) => String(value || "").toLowerCase().includes(query)));
+      const hiddenCount = state.moments.filter((item) => item.hidden).length;
+      $("contentCount").textContent = "共 " + state.moments.length + " 条 · 已隐藏 " + hiddenCount;
+      if (!moments.length) { $("contentList").innerHTML = `<tr><td colspan="6">${emptyState("没有匹配的内容", "moments")}</td></tr>`; return; }
+      $("contentList").innerHTML = moments.map((item) => `
+        <tr${item.hidden ? ' style="opacity:.62"' : ""}>
+          <td data-label="内容" class="t3" style="max-width:360px">${escapeHtml((item.content || "").slice(0, 140))}${(item.content || "").length > 140 ? "…" : ""}${item.hidden ? ' <span class="tag open">已隐藏</span>' : ""}</td>
+          <td data-label="用户">${escapeHtml(item.username || ("用户 #" + item.user_id))}</td>
+          <td data-label="人格">${escapeHtml(item.persona_name || "-")}</td>
+          <td data-label="互动" class="num">${escapeHtml(String(item.like_count || 0))} / ${escapeHtml(String(item.comment_count || 0))}</td>
+          <td data-label="时间" class="t3">${fmtShort(item.created_at)}</td>
+          <td data-label="操作" style="text-align:right">
+            <button class="btn small ${item.hidden ? "primary" : "ghost"}" data-moment-hide="${escapeHtml(String(item.id))}" data-current="${item.hidden ? 1 : 0}">${item.hidden ? "恢复" : "隐藏"}</button>
+          </td>
+        </tr>`).join("");
+    }
+
+    /* ---------------------------------------------------------------- ops */
+    function renderOps() {
+      $("announceHead").innerHTML = headIcon("bell", "发布公告");
+      $("announceForm").innerHTML = `
+        <div class="form-grid">
+          <div class="field full"><label>标题</label><input id="anTitle" placeholder="公告标题" /></div>
+          <div class="field full"><label>内容</label><textarea id="anBody" rows="4" placeholder="公告正文"></textarea></div>
+          <div class="field"><label>开始时间（可选）</label><input id="anStart" placeholder="ISO，如 2026-09-18T00:00:00" /></div>
+          <div class="field"><label>结束时间（可选）</label><input id="anEnd" placeholder="留空表示长期有效" /></div>
+        </div>
+        <div class="btnrow"><button class="btn primary wide" id="announceCreate">发布公告</button></div>`;
+      $("noticeHead").innerHTML = headIcon("send", "站内通知");
+      $("noticeForm").innerHTML = `
+        <div class="form-grid">
+          <div class="field full"><label>通知内容</label><textarea id="ntMessage" rows="4" placeholder="发送给全体活跃用户"></textarea></div>
+          <div class="field full"><label>指定用户 ID（逗号分隔，留空为全体）</label><input id="ntUsers" placeholder="例如 5,12,13" /></div>
+        </div>
+        <div class="btnrow"><button class="btn primary wide" id="noticeSend">发送通知</button></div>`;
+
+      $("announceListHead").innerHTML = headIcon("clock", "公告列表", `<span class="spacer"></span><span class="tag plain">${state.announcements.length} 条</span>`);
+      if (!state.announcements.length) { $("announceList").innerHTML = emptyState("暂无公告", "bell"); return; }
+      $("announceList").innerHTML = `<div class="feed">${state.announcements.map((item) => `
+        <div class="feed-item">
+          <div class="feed-dot" style="background:${item.active ? TONE.green.soft : TONE.orange.soft};color:${item.active ? TONE.green.color : TONE.orange.color}">${icon("bell")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.title || "")} ${item.active ? '<span class="tag resolved">生效中</span>' : '<span class="tag plain">已停发</span>'}</div>
+            <div class="feed-sub">${escapeHtml((item.body || "").slice(0, 120))}</div>
+            <div class="feed-time">${fmtTime(item.created_at)}${item.starts_at || item.ends_at ? " · " + escapeHtml(item.starts_at || "长期") + " ~ " + escapeHtml(item.ends_at || "长期") : ""}</div>
+          </div>
+          <button class="btn small ${item.active ? "ghost" : "primary"}" data-announce-active="${escapeHtml(String(item.id))}" data-current="${item.active ? 1 : 0}">${item.active ? "停发" : "启用"}</button>
+        </div>`).join("")}</div>`;
+
+      const btnA = $("announceCreate");
+      if (btnA) btnA.onclick = async () => {
+        const title = $("anTitle").value.trim();
+        if (!title) { toast("请填写公告标题"); return; }
+        try {
+          await api("/api/admin/announcements", { method: "POST", body: JSON.stringify({
+            title, body: $("anBody").value.trim(), audience: "all",
+            starts_at: $("anStart").value.trim(), ends_at: $("anEnd").value.trim(),
+          }) });
+          toast("公告已发布"); await loadAll();
+        } catch (error) { toast(error.message); }
+      };
+      const btnN = $("noticeSend");
+      if (btnN) btnN.onclick = async () => {
+        const message = $("ntMessage").value.trim();
+        if (!message) { toast("请填写通知内容"); return; }
+        const raw = $("ntUsers").value.trim();
+        const user_ids = raw ? raw.split(/[,，\s]+/).map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0) : null;
+        try {
+          const result = await api("/api/admin/notices", { method: "POST", body: JSON.stringify({ message, user_ids }) });
+          toast("已发送给 " + (result.sent || 0) + " 位用户"); $("ntMessage").value = ""; $("ntUsers").value = "";
+        } catch (error) { toast(error.message); }
+      };
+    }
+
+    /* ------------------------------------------------------------- system extras */
+    function renderSystemExtras() {
+      const labels = { moments_auto: "朋友圈自动发布", wechat_login: "微信登录", platform_model: "平台模型" };
+      $("flagHead").innerHTML = headIcon("sliders", "功能开关");
+      $("flagList").innerHTML = Object.keys(labels).map((key) => {
+        const on = !!(state.flags || {})[key];
+        return `<div class="toggle-row" style="align-items:center;justify-content:space-between;padding:10px 0">
+          <div><b>${escapeHtml(labels[key])}</b><div class="mini">${escapeHtml(key)}</div></div>
+          <button class="btn small ${on ? "primary" : "ghost"}" data-flag="${escapeHtml(key)}" data-current="${on ? 1 : 0}">${on ? "已开启" : "已关闭"}</button>
+        </div>`;
+      }).join("");
+
+      $("bindingHead").innerHTML = headIcon("wechat", "微信绑定", `<span class="spacer"></span><span class="tag plain">${state.bindings.length}</span>`);
+      $("bindingList").innerHTML = state.bindings.length ? `<div class="feed">${state.bindings.map((item) => `
+        <div class="feed-item">
+          <div class="feed-dot">${icon("wechat")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${item.phase === "running" ? "resolved" : "plain"}">${escapeHtml(item.phase || "idle")}</span></div>
+            <div class="feed-sub">人格：${escapeHtml(item.persona_name || "未绑定")}</div>
+            <div class="feed-time">${fmtTime(item.updated_at)}</div>
+          </div>
+          <button class="btn small ghost" data-binding-stop="${escapeHtml(String(item.user_id))}">强制下线</button>
+        </div>`).join("")}</div>` : emptyState("暂无绑定", "wechat");
+
+      $("backupHead").innerHTML = headIcon("download", "数据库备份", '<span class="hint">只读</span>');
+      $("backupList").innerHTML = state.backups.length ? `<div class="feed">${state.backups.slice(0, 10).map((item) => `
+        <div class="feed-item">
+          <div class="feed-dot">${icon("download")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.name)}</div>
+            <div class="feed-sub">${(Number(item.size) / 1048576).toFixed(2)} MB</div>
+            <div class="feed-time">${fmtTime(item.mtime)}</div>
+          </div>
+        </div>`).join("")}</div>` : emptyState("暂无备份文件", "download");
+
+      const failed = state.tasks.filter((item) => item.status === "error" || item.status === "interrupted");
+      $("taskHead").innerHTML = headIcon("refresh", "任务队列", `<span class="spacer"></span><span class="tag ${failed.length ? "open" : "plain"}">${failed.length} 个异常</span>`);
+      if (!state.tasks.length) { $("taskList").innerHTML = emptyState("暂无任务", "refresh"); return; }
+      $("taskList").innerHTML = `<div class="feed">${state.tasks.slice(0, 20).map((item) => {
+        const bad = item.status === "error" || item.status === "interrupted";
+        return `<div class="feed-item">
+          <div class="feed-dot" style="background:${bad ? TONE.red.soft : TONE.v.soft};color:${bad ? TONE.red.color : TONE.v.color}">${icon("refresh")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(item.kind || "任务")} · ${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${bad ? "open" : "plain"}">${escapeHtml(item.status || "")}</span></div>
+            <div class="feed-sub">${escapeHtml(item.error || item.message || "")}</div>
+            <div class="feed-time">${fmtTime(item.created_at)}</div>
+          </div>
+          ${bad ? `<button class="btn small ghost" data-task-retry="${escapeHtml(String(item.id))}">重试</button>` : ""}
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    /* ------------------------------------------------------------ admins */
+    function renderAdmins() {
+      const query = state.adminQuery.trim().toLowerCase();
+      const items = state.admins.filter((item) => !query || String(item.username || "").toLowerCase().includes(query));
+      $("adminCount").textContent = "共 " + state.admins.length + " 位管理员";
+      if (!items.length) { $("adminList").innerHTML = `<tr><td colspan="5">${emptyState("暂无管理员", "shield")}</td></tr>`; return; }
+      const meId = (window.__admin || {}).id;
+      $("adminList").innerHTML = items.map((item) => {
+        const disabled = item.status === "disabled";
+        const self = Number(item.id) === Number(meId);
+        return `<tr>
+          <td data-label="管理员"><div class="u"><div class="avatar">${escapeHtml((item.username || "?").slice(0, 1).toUpperCase())}</div>
+            <div><b>${escapeHtml(item.name || item.username || "未命名")}</b><span>${escapeHtml(item.username || "")}${self ? " · 当前登录" : ""}</span></div></div></td>
+          <td data-label="状态"><span class="tag ${disabled ? "open" : "resolved"}">${disabled ? "已停用" : "正常"}</span></td>
+          <td data-label="双因素">${item.totp_enabled ? '<span class="tag resolved">已开启</span>' : '<span class="tag plain">未开启</span>'}</td>
+          <td data-label="最近登录" class="t3">${item.last_login_at ? fmtShort(item.last_login_at) : "-"}</td>
+          <td data-label="操作" style="text-align:right"><div class="user-acts">
+            <button class="btn small ghost" data-admin-status="${escapeHtml(String(item.id))}" data-current="${disabled ? "disabled" : "active"}" ${self ? "disabled" : ""}>${disabled ? "启用" : "停用"}</button>
+            <button class="btn small ghost" data-admin-pass="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">重置密码</button>
+            ${item.totp_enabled ? `<button class="btn small ghost" data-admin-totp="${escapeHtml(String(item.id))}" data-name="${escapeHtml(item.username || "")}">重置双因素</button>` : ""}
+          </div></td>
+        </tr>`;
+      }).join("");
+    }
+
     /* ------------------------------------------------------------- audit */
     function renderAudit() {
       const query = state.auditQuery.trim().toLowerCase();
@@ -1031,12 +1311,17 @@
       state.pendingReload = false;
       $("refreshBtn").disabled = true;
       try {
-        const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery, orders, dashboard] = await Promise.all([
+        const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery, orders, dashboard,
+          personas, moments, announcements, admins, flags, bindings, backups, tasks] = await Promise.all([
           api("/api/admin/summary"), api("/api/admin/users?size=100"), api("/api/admin/reports"),
           api("/api/admin/audit"), api("/api/metrics"), api("/health"),
           api("/api/admin/platform"), api("/api/admin/credits"),
           api("/api/admin/redemption-codes?limit=200"), api("/api/admin/recovery"),
           api("/api/admin/orders?limit=200"), api("/api/admin/dashboard?days=30"),
+          api("/api/admin/content/personas?limit=200"), api("/api/admin/content/moments?limit=200"),
+          api("/api/admin/announcements"), api("/api/admin/admins"),
+          api("/api/admin/system/flags"), api("/api/admin/system/bindings"),
+          api("/api/admin/system/backups"), api("/api/admin/system/tasks?limit=200"),
         ]);
         state.summary = summary; state.users = users.items || []; state.reports = reports.items || [];
         state.audit = audit.items || []; state.metrics = metrics; state.health = health;
@@ -1047,8 +1332,13 @@
         state.recovery = recovery.items || [];
         state.orders = orders.items || []; state.ordersRevenue = orders.revenue || null;
         state.dashboard = dashboard || null;
+        state.personas = personas.items || []; state.moments = moments.items || [];
+        state.announcements = announcements.items || []; state.admins = admins.items || [];
+        state.flags = flags.flags || {}; state.bindings = bindings.items || [];
+        state.backups = backups.items || []; state.tasks = tasks.items || [];
         state.online = true;
-        renderOverview(); renderReports(); renderUsers(); renderOrders(); renderAudit(); renderSystem(); renderCreditsPanel();
+        renderOverview(); renderReports(); renderUsers(); renderContent(); renderOrders(); renderOps();
+        renderAudit(); renderSystem(); renderSystemExtras(); renderCreditsPanel(); renderAdmins();
         renderNavBadges();
         const name = (window.__admin && (window.__admin.name || window.__admin.username)) || "管理员";
         $("adminLine").textContent = `${name} · 数据同步于 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })} · 服务运行 ${fmtUptime(metrics.uptime_seconds)}`;
@@ -1090,6 +1380,7 @@
       $("userSearchIcon").innerHTML = icon("search");
       $("orderSearchIcon").innerHTML = icon("search");
       $("auditSearchIcon").innerHTML = icon("search");
+      $("contentSearchIcon").innerHTML = icon("search");
     }
 
     document.addEventListener("click", async (event) => {
@@ -1234,11 +1525,152 @@
         } catch (error) { toast(error.message); statusButton.disabled = false; }
         return;
       }
+
+      const contentSeg = event.target.closest("#contentFilter button");
+      if (contentSeg) {
+        state.contentKind = contentSeg.dataset.kind;
+        document.querySelectorAll("#contentFilter button").forEach((btn) => btn.classList.toggle("active", btn === contentSeg));
+        refreshSegment($("contentFilter"));
+        renderContent();
+        return;
+      }
+      const personaStatus = event.target.closest("[data-persona-status]");
+      if (personaStatus) {
+        const disabled = personaStatus.dataset.current === "disabled";
+        personaStatus.disabled = true;
+        try {
+          await api(`/api/admin/content/personas/${personaStatus.dataset.personaStatus}/status`, {
+            method: "POST", body: JSON.stringify({ status: disabled ? "ready" : "disabled" }),
+          });
+          toast(disabled ? "已恢复该人格" : "已停用该人格"); await loadAll();
+        } catch (error) { toast(error.message); personaStatus.disabled = false; }
+        return;
+      }
+      const momentHide = event.target.closest("[data-moment-hide]");
+      if (momentHide) {
+        const hidden = momentHide.dataset.current === "1";
+        momentHide.disabled = true;
+        try {
+          await api(`/api/admin/content/moments/${momentHide.dataset.momentHide}/hidden`, {
+            method: "POST", body: JSON.stringify({ hidden: !hidden }),
+          });
+          toast(hidden ? "已恢复该内容" : "已隐藏该内容"); await loadAll();
+        } catch (error) { toast(error.message); momentHide.disabled = false; }
+        return;
+      }
+      const announceActive = event.target.closest("[data-announce-active]");
+      if (announceActive) {
+        const on = announceActive.dataset.current === "1";
+        announceActive.disabled = true;
+        try {
+          await api(`/api/admin/announcements/${announceActive.dataset.announceActive}/active`, {
+            method: "POST", body: JSON.stringify({ active: !on }),
+          });
+          toast(on ? "已停发公告" : "公告已启用"); await loadAll();
+        } catch (error) { toast(error.message); announceActive.disabled = false; }
+        return;
+      }
+      const flagButton = event.target.closest("[data-flag]");
+      if (flagButton) {
+        const on = flagButton.dataset.current === "1";
+        flagButton.disabled = true;
+        try {
+          await api(`/api/admin/system/flags/${encodeURIComponent(flagButton.dataset.flag)}`, {
+            method: "PUT", body: JSON.stringify({ value: !on }),
+          });
+          toast("开关已更新"); await loadAll();
+        } catch (error) { toast(error.message); flagButton.disabled = false; }
+        return;
+      }
+      const bindingStop = event.target.closest("[data-binding-stop]");
+      if (bindingStop) {
+        bindingStop.disabled = true;
+        try {
+          await api(`/api/admin/system/bindings/${bindingStop.dataset.bindingStop}/stop`, { method: "POST" });
+          toast("已强制下线"); await loadAll();
+        } catch (error) { toast(error.message); bindingStop.disabled = false; }
+        return;
+      }
+      const taskRetry = event.target.closest("[data-task-retry]");
+      if (taskRetry) {
+        taskRetry.disabled = true;
+        try {
+          await api(`/api/admin/system/tasks/${encodeURIComponent(taskRetry.dataset.taskRetry)}/retry`, { method: "POST" });
+          toast("任务已重新排队"); await loadAll();
+        } catch (error) { toast(error.message); taskRetry.disabled = false; }
+        return;
+      }
+      const adminStatus = event.target.closest("[data-admin-status]");
+      if (adminStatus) {
+        const disabled = adminStatus.dataset.current === "disabled";
+        adminStatus.disabled = true;
+        try {
+          await api(`/api/admin/admins/${adminStatus.dataset.adminStatus}/status`, {
+            method: "POST", body: JSON.stringify({ status: disabled ? "active" : "disabled" }),
+          });
+          toast(disabled ? "已启用该管理员" : "已停用该管理员"); await loadAll();
+        } catch (error) { toast(error.message); adminStatus.disabled = false; }
+        return;
+      }
+      const adminPass = event.target.closest("[data-admin-pass]");
+      if (adminPass) {
+        const name = adminPass.dataset.name || ("管理员 #" + adminPass.dataset.adminPass);
+        openModal("重置管理员密码", `<div class="sub">为 <b>${escapeHtml(name)}</b> 设置新密码（至少 8 位），其所有后台会话会立即失效。</div>
+          <div class="field"><label>新密码</label><input id="apw" type="password" autocomplete="new-password" /></div>
+          <div class="btnrow"><button class="btn primary" id="apwOk" style="flex:1">确认重置</button></div>`, (body, mask) => {
+          body.querySelector("#apwOk").onclick = async () => {
+            const value = body.querySelector("#apw").value;
+            if (!value || value.length < 8) { toast("密码至少 8 位"); return; }
+            try {
+              await api(`/api/admin/admins/${adminPass.dataset.adminPass}/password`, { method: "POST", body: JSON.stringify({ password: value }) });
+              closeModal(mask); toast("管理员密码已重置"); await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const adminTotp = event.target.closest("[data-admin-totp]");
+      if (adminTotp) {
+        const name = adminTotp.dataset.name || ("管理员 #" + adminTotp.dataset.adminTotp);
+        openModal("重置双因素", `<div class="sub">重置 <b>${escapeHtml(name)}</b> 的动态口令？重置后下次登录不再要求验证码。</div>
+          <div class="btnrow">
+            <button class="btn ghost wide" id="atCancel">取消</button>
+            <button class="btn primary wide" id="atOk">确认重置</button>
+          </div>`, (body, mask) => {
+          body.querySelector("#atCancel").onclick = () => closeModal(mask);
+          body.querySelector("#atOk").onclick = async () => {
+            try {
+              await api(`/api/admin/admins/${adminTotp.dataset.adminTotp}/totp`, { method: "POST" });
+              closeModal(mask); toast("双因素已重置"); await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
     });
 
     $("userSearch").addEventListener("input", (event) => { state.userQuery = event.target.value; renderUsers(); });
     $("orderSearch").addEventListener("input", (event) => { state.orderQuery = event.target.value; renderOrders(); });
     $("auditSearch").addEventListener("input", (event) => { state.auditQuery = event.target.value; renderAudit(); });
+    $("contentSearch").addEventListener("input", (event) => { state.contentQuery = event.target.value; renderContent(); });
+    $("newAdminBtn").onclick = () => {
+      openModal("新建管理员", `<div class="sub">创建一个独立的后台管理员账号，与用户账号完全分离。</div>
+        <div class="field"><label>用户名</label><input id="adName" autocomplete="off" /></div>
+        <div class="field"><label>显示名称（可选）</label><input id="adLabel" autocomplete="off" /></div>
+        <div class="field"><label>密码（至少 8 位）</label><input id="adPass" type="password" autocomplete="new-password" /></div>
+        <div class="btnrow"><button class="btn primary" id="adOk" style="flex:1">创建</button></div>`, (body, mask) => {
+        body.querySelector("#adOk").onclick = async () => {
+          const username = body.querySelector("#adName").value.trim();
+          const password = body.querySelector("#adPass").value;
+          if (!username || !password) { toast("请填写用户名与密码"); return; }
+          if (password.length < 8) { toast("密码至少 8 位"); return; }
+          try {
+            await api("/api/admin/admins", { method: "POST", body: JSON.stringify({ username, password, name: body.querySelector("#adLabel").value.trim() }) });
+            closeModal(mask); toast("管理员已创建"); await loadAll();
+          } catch (error) { toast(error.message); }
+        };
+      });
+    };
     $("navToggle").onclick = openNav;
     $("sideClose").onclick = closeNav;
     $("navScrim").onclick = closeNav;

@@ -200,5 +200,208 @@ class AdminOrderTest(unittest.TestCase):
             )
 
 
+class AdminContentModerationTest(unittest.TestCase):
+    def _persona(self, client, username):
+        user = _register(client, username)
+        created = client.post(
+            "/api/personas", json={"name": "念念", "target_name": "前任"}
+        )
+        assert created.status_code == 200, created.text
+        persona = store.get_active_persona(user["id"])
+        self.assertIsNotNone(persona)
+        return user, persona
+
+    def test_persona_disable_and_restore(self):
+        with TestClient(app) as client:
+            user, persona = self._persona(client, f"moderator-{uuid.uuid4().hex[:8]}")
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+
+            listing = client.get("/api/admin/content/personas?limit=200")
+            self.assertEqual(listing.status_code, 200, listing.text)
+            self.assertTrue(any(item["id"] == persona["id"] for item in listing.json()["items"]))
+
+            stopped = client.post(
+                f"/api/admin/content/personas/{persona['id']}/status",
+                json={"status": "disabled", "reason": "违规"},
+            )
+            self.assertEqual(stopped.status_code, 200, stopped.text)
+            self.assertEqual(store.get_persona(user["id"], persona["id"])["status"], "disabled")
+            self.assertEqual(store.get_persona(user["id"], persona["id"])["is_active"], 0)
+
+            detail = client.get(f"/api/admin/content/personas/{persona['id']}")
+            self.assertEqual(detail.status_code, 200, detail.text)
+            self.assertIn("counts", detail.json()["persona"])
+
+            restored = client.post(
+                f"/api/admin/content/personas/{persona['id']}/status",
+                json={"status": "ready"},
+            )
+            self.assertEqual(restored.status_code, 200, restored.text)
+            self.assertEqual(store.get_persona(user["id"], persona["id"])["status"], "ready")
+
+    def test_hidden_moment_is_filtered_from_user_feed(self):
+        with TestClient(app) as client:
+            user, persona = self._persona(client, f"moment-{uuid.uuid4().hex[:8]}")
+            moment = store.add_moment(user["id"], persona["id"], "今天很想你", source="manual")
+            self.assertEqual(
+                len(store.list_moments(user["id"], persona["id"])), 1
+            )
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+
+            listing = client.get("/api/admin/content/moments?limit=200")
+            self.assertEqual(listing.status_code, 200, listing.text)
+            self.assertTrue(any(item["id"] == moment["id"] for item in listing.json()["items"]))
+
+            hidden = client.post(
+                f"/api/admin/content/moments/{moment['id']}/hidden", json={"hidden": True}
+            )
+            self.assertEqual(hidden.status_code, 200, hidden.text)
+            self.assertEqual(store.list_moments(user["id"], persona["id"]), [])
+
+            visible = client.post(
+                f"/api/admin/content/moments/{moment['id']}/hidden", json={"hidden": False}
+            )
+            self.assertEqual(visible.status_code, 200, visible.text)
+            self.assertEqual(len(store.list_moments(user["id"], persona["id"])), 1)
+
+
+class AdminOpsTest(unittest.TestCase):
+    def test_announcement_lifecycle_and_notice(self):
+        with TestClient(app) as client:
+            user = _register(client, f"ops-{uuid.uuid4().hex[:8]}")
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+
+            created = client.post(
+                "/api/admin/announcements",
+                json={"title": "维护通知", "body": "今晚升级", "audience": "all"},
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            announcement_id = created.json()["announcement"]["id"]
+
+            active = client.get("/api/announcements")
+            self.assertEqual(active.status_code, 200, active.text)
+            self.assertTrue(any(item["id"] == announcement_id for item in active.json()["items"]))
+
+            off = client.post(
+                f"/api/admin/announcements/{announcement_id}/active", json={"active": False}
+            )
+            self.assertEqual(off.status_code, 200, off.text)
+            self.assertFalse(
+                any(item["id"] == announcement_id for item in client.get("/api/announcements").json()["items"])
+            )
+
+            sent = client.post("/api/admin/notices", json={"message": "欢迎回来", "user_ids": [user["id"]]})
+            self.assertEqual(sent.status_code, 200, sent.text)
+            self.assertEqual(sent.json()["sent"], 1)
+            self.assertGreaterEqual(store.count_unread_alerts(user["id"]), 1)
+
+    def test_broadcast_notice_reaches_all_active_users(self):
+        with TestClient(app) as client:
+            user = _register(client, f"broadcast-{uuid.uuid4().hex[:8]}")
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+            sent = client.post("/api/admin/notices", json={"message": "全体通知", "user_ids": None})
+            self.assertEqual(sent.status_code, 200, sent.text)
+            self.assertGreaterEqual(sent.json()["sent"], 1)
+            self.assertGreaterEqual(store.count_unread_alerts(user["id"]), 1)
+
+
+class AdminSystemTest(unittest.TestCase):
+    def test_feature_flags_roundtrip(self):
+        with TestClient(app) as client:
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+
+            flags = client.get("/api/admin/system/flags")
+            self.assertEqual(flags.status_code, 200, flags.text)
+            self.assertIn("moments_auto", flags.json()["flags"])
+
+            updated = client.put("/api/admin/system/flags/moments_auto", json={"value": True})
+            self.assertEqual(updated.status_code, 200, updated.text)
+            self.assertEqual(store.get_feature_flags()["moments_auto"], 1)
+
+            blocked = client.put("/api/admin/system/flags/unknown_flag", json={"value": True})
+            self.assertEqual(blocked.status_code, 404)
+
+    def test_flags_default_on_and_immediate_effect(self):
+        flags = store.get_feature_flags()
+        for key in ("moments_auto", "wechat_login", "platform_model"):
+            self.assertEqual(flags[key], 1)
+            self.assertTrue(store.feature_flag_enabled(key))
+        store.set_feature_flag("moments_auto", 0, "tester")
+        self.assertFalse(store.feature_flag_enabled("moments_auto"))
+        store.set_feature_flag("moments_auto", 1, "tester")
+
+    def test_task_retry_and_backups_and_health(self):
+        with TestClient(app) as client:
+            user = _register(client, f"tasker-{uuid.uuid4().hex[:8]}")
+            task = store.create_task(f"task-{uuid.uuid4().hex[:8]}", user["id"], None, "distill")
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            _admin_login(client, admin_username)
+
+            listing = client.get("/api/admin/system/tasks?limit=200")
+            self.assertEqual(listing.status_code, 200, listing.text)
+            self.assertTrue(any(item["id"] == task["id"] for item in listing.json()["items"]))
+
+            retried = client.post(f"/api/admin/system/tasks/{task['id']}/retry")
+            self.assertEqual(retried.status_code, 200, retried.text)
+            self.assertEqual(store.get_task(task["id"])["status"], "pending")
+
+            backups = client.get("/api/admin/system/backups")
+            self.assertEqual(backups.status_code, 200, backups.text)
+            self.assertIsInstance(backups.json()["items"], list)
+
+            health = client.get("/api/admin/system/health")
+            self.assertEqual(health.status_code, 200, health.text)
+            self.assertEqual(health.json()["status"], "ok")
+            self.assertIn("outbox", health.json())
+
+
+class AdminManagementTest(unittest.TestCase):
+    def test_create_status_and_scoped_actions(self):
+        with TestClient(app) as client:
+            admin_username = f"admin-{uuid.uuid4().hex[:8]}"
+            _make_admin(admin_username)
+            me = _admin_login(client, admin_username)
+
+            listing = client.get("/api/admin/admins")
+            self.assertEqual(listing.status_code, 200, listing.text)
+            self.assertTrue(any(item["username"] == admin_username for item in listing.json()["items"]))
+
+            created = client.post(
+                "/api/admin/admins",
+                json={"username": f"new-admin-{uuid.uuid4().hex[:8]}", "password": "password123", "name": "副手"},
+            )
+            self.assertEqual(created.status_code, 200, created.text)
+            new_id = created.json()["admin"]["id"]
+
+            reset = client.post(
+                f"/api/admin/admins/{new_id}/password", json={"password": "password456"}
+            )
+            self.assertEqual(reset.status_code, 200, reset.text)
+            self.assertTrue(accounts.authenticate_admin(store.get_admin(new_id)["username"], "password456"))
+
+            totp = client.post(f"/api/admin/admins/{new_id}/totp")
+            self.assertEqual(totp.status_code, 200, totp.text)
+
+            disabled = client.post(f"/api/admin/admins/{new_id}/status", json={"status": "disabled"})
+            self.assertEqual(disabled.status_code, 200, disabled.text)
+            self.assertEqual(store.get_admin(new_id)["status"], "disabled")
+
+            self_reset = client.post(
+                f"/api/admin/admins/{me['admin']['id']}/status", json={"status": "disabled"}
+            )
+            self.assertEqual(self_reset.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

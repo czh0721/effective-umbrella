@@ -704,6 +704,7 @@ def _public_admin(admin: dict) -> dict:
         "id": admin["id"],
         "username": admin.get("username"),
         "name": admin.get("name") or admin.get("username"),
+        "status": admin.get("status") or "active",
         "totp_enabled": bool(admin.get("totp_enabled")),
         "created_at": admin.get("created_at"),
         "last_login_at": admin.get("last_login_at"),
@@ -829,7 +830,7 @@ def build_config(user_id: int, persona: dict | None = None) -> LLMConfig:
     # 避免「选择厂商但无 Key」导致的空 Key 调用失败。
     if not api_key:
         platform = load_platform_config()
-        if platform.ready:
+        if platform.ready and store.feature_flag_enabled("platform_model"):
             return LLMConfig(
                 api_key=platform.api_key,
                 base_url=platform.base_url,
@@ -1242,6 +1243,50 @@ class UserNoteRequest(BaseModel):
     tags: str = ""
 
 
+class PersonaStatusChange(BaseModel):
+    status: str
+    reason: str | None = None
+
+
+class MomentHiddenChange(BaseModel):
+    hidden: bool = True
+
+
+class AnnouncementRequest(BaseModel):
+    title: str
+    body: str = ""
+    audience: str = "all"
+    starts_at: str = ""
+    ends_at: str = ""
+
+
+class AnnouncementActiveChange(BaseModel):
+    active: bool = True
+
+
+class NoticeRequest(BaseModel):
+    message: str
+    user_ids: list[int] | None = None
+
+
+class FeatureFlagUpdate(BaseModel):
+    value: bool = False
+
+
+class AdminCreateRequest(BaseModel):
+    username: str
+    password: str
+    name: str = ""
+
+
+class AdminStatusChange(BaseModel):
+    status: str
+
+
+class AdminCredentialReset(BaseModel):
+    password: str
+
+
 class RedemptionCodeRequest(BaseModel):
     count: int = 10
     coins: int
@@ -1574,7 +1619,7 @@ def me(user: dict = Depends(current_user)) -> dict:
     config_row = store.get_model_config(user["id"]) or {}
     binding = store.get_wechat_binding(user["id"])
     channel = _channel_info(user["id"], active or {})
-    platform_ready = load_platform_config().ready
+    platform_ready = load_platform_config().ready and store.feature_flag_enabled("platform_model")
     has_key = own_key_usable(config_row)
     wechat_bound = bool(binding and binding.get("phase") in {"logged-in", "running"})
     credits = store.credits_summary(user["id"])
@@ -1606,7 +1651,7 @@ def me(user: dict = Depends(current_user)) -> dict:
             "wechat_bound": wechat_bound,
             "done": bool(personas) and (has_key or platform_ready) and wechat_bound,
         },
-        "wechat_login_enabled": wechat_login.enabled(),
+        "wechat_login_enabled": wechat_login.enabled() and store.feature_flag_enabled("wechat_login"),
         "presets": presets.list_presets(),
         "credits": credits,
         "notifications": {"unread": store.count_unread_alerts(user["id"])},
@@ -1670,7 +1715,7 @@ def delete_account(payload: PasswordChange, user: dict = Depends(current_user)) 
 
 @app.get("/api/auth/wechat/url")
 def wechat_authorize() -> dict:
-    if not wechat_login.enabled():
+    if not wechat_login.enabled() or not store.feature_flag_enabled("wechat_login"):
         raise HTTPException(status_code=404, detail="未启用微信扫码登录")
     state = uuid.uuid4().hex
     store.create_login_state(state)
@@ -1679,7 +1724,7 @@ def wechat_authorize() -> dict:
 
 @app.get("/api/auth/wechat/callback")
 def wechat_callback(request: Request, code: str = "", state: str = "") -> RedirectResponse:
-    if not wechat_login.enabled():
+    if not wechat_login.enabled() or not store.feature_flag_enabled("wechat_login"):
         raise HTTPException(status_code=404, detail="未启用微信扫码登录")
     if not store.consume_login_state(state):
         return RedirectResponse("/login?error=state", status_code=302)
@@ -2689,6 +2734,11 @@ def run_proactive(persona_id: int, user: dict = Depends(current_user)) -> dict:
 
 @app.post("/api/personas/{persona_id}/activate")
 def activate(persona_id: int, user: dict = Depends(current_user)) -> dict:
+    existing = store.get_persona(user["id"], persona_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="人格不存在")
+    if existing.get("status") == "disabled":
+        raise HTTPException(status_code=403, detail="该人格已被管理员停用")
     persona = store.activate_persona(user["id"], persona_id)
     if persona is None:
         raise HTTPException(status_code=404, detail="人格不存在")
@@ -3191,6 +3241,10 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
         # 已「告别」的人格不再自动回复；用户在应用里重新激活后会恢复。
         observability.METRICS.inc("reply.retired")
         return _completion(request, "")
+    if persona.get("status") == "disabled":
+        # 被管理员停用的人格不再自动回复，需等管理员恢复。
+        observability.METRICS.inc("reply.disabled")
+        return _completion(request, "")
 
     settings = persona_settings.load(persona.get("settings"))
     contact = (request.user or "").strip()
@@ -3476,6 +3530,12 @@ def read_notifications(user: dict = Depends(current_user)) -> dict:
     return {"ok": True, "unread": 0}
 
 
+@app.get("/api/announcements")
+def list_announcements(user: dict = Depends(current_user)) -> dict:
+    """当前生效的站内公告。"""
+    return {"items": store.active_announcements()}
+
+
 @app.post("/api/reports")
 def create_report(payload: ReportRequest, user: dict = Depends(current_user)) -> dict:
     category = (payload.category or "other").strip()[:40] or "other"
@@ -3650,6 +3710,306 @@ def admin_orders(
 def admin_orders_revenue(days: int = 30, admin: dict = Depends(current_admin)) -> dict:
     """营收汇总与逐日趋势。"""
     return store.orders_revenue(days)
+
+
+@app.get("/api/admin/content/personas")
+def admin_content_personas(
+    q: str = "",
+    status: str = "",
+    user_id: int | None = None,
+    limit: int = 100,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """内容审核：人格列表。"""
+    return {"items": store.search_personas(query=q, status=status, user_id=user_id, limit=limit)}
+
+
+@app.get("/api/admin/content/personas/{persona_id}")
+def admin_content_persona(persona_id: int, admin: dict = Depends(current_admin)) -> dict:
+    detail = store.persona_overview(persona_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="人格不存在")
+    return {"persona": detail}
+
+
+@app.post("/api/admin/content/personas/{persona_id}/status")
+def admin_content_persona_status(
+    persona_id: int, payload: PersonaStatusChange, admin: dict = Depends(current_admin)
+) -> dict:
+    """停用/恢复人格（软处置，可恢复）。"""
+    status = (payload.status or "").strip().lower()
+    if status not in {"ready", "disabled"}:
+        raise HTTPException(status_code=400, detail="状态只能是 ready 或 disabled")
+    result = store.set_persona_status(persona_id, status)
+    if result is None:
+        raise HTTPException(status_code=404, detail="人格不存在")
+    reason = (payload.reason or "").strip()[:500]
+    _audit(
+        admin,
+        "persona.set_status",
+        target=str(persona_id),
+        detail=f"user_id={result.get('user_id')} status={status} reason={reason}",
+    )
+    return {"ok": True, "status": status}
+
+
+@app.get("/api/admin/content/moments")
+def admin_content_moments(
+    q: str = "",
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    hidden: int | None = None,
+    limit: int = 100,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """内容审核：朋友圈列表。"""
+    return {
+        "items": store.admin_list_moments(
+            query=q, from_iso=from_date, to_iso=to_date, hidden=hidden, limit=limit
+        )
+    }
+
+
+@app.post("/api/admin/content/moments/{moment_id}/hidden")
+def admin_content_moment_hidden(
+    moment_id: int, payload: MomentHiddenChange, admin: dict = Depends(current_admin)
+) -> dict:
+    """隐藏/恢复朋友圈内容（软删除，可恢复）。"""
+    result = store.set_moment_hidden(moment_id, bool(payload.hidden))
+    if result is None:
+        raise HTTPException(status_code=404, detail="内容不存在")
+    _audit(
+        admin,
+        "moment.set_hidden",
+        target=str(moment_id),
+        detail=f"user_id={result.get('user_id')} hidden={int(bool(payload.hidden))}",
+    )
+    return {"ok": True, "hidden": bool(payload.hidden)}
+
+
+@app.post("/api/admin/redemption-codes/{code_id}/void")
+def admin_void_redemption_code(code_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """作废未使用的兑换码。"""
+    result = store.void_redemption_code(code_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="兑换码不存在")
+    _audit(admin, "redemption.void", target=str(code_id), detail=f"voided={result.get('voided')}")
+    return {"ok": True, **result}
+
+
+@app.get("/api/admin/credit-batches")
+def admin_credit_batches(
+    q: str = "",
+    from_date: str = Query("", alias="from"),
+    to_date: str = Query("", alias="to"),
+    limit: int = 100,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """积分批次列表。"""
+    return {
+        "items": store.admin_list_credit_batches(
+            query=q, from_iso=from_date, to_iso=to_date, limit=limit
+        )
+    }
+
+
+@app.get("/api/admin/announcements")
+def admin_announcements(admin: dict = Depends(current_admin)) -> dict:
+    return {"items": store.list_announcements(limit=200)}
+
+
+@app.post("/api/admin/announcements")
+def admin_create_announcement(
+    payload: AnnouncementRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    """新建公告。"""
+    title = (payload.title or "").strip()[:120]
+    if not title:
+        raise HTTPException(status_code=400, detail="请填写公告标题")
+    body = (payload.body or "").strip()[:4000]
+    item = store.create_announcement(
+        title,
+        body,
+        audience=(payload.audience or "all"),
+        starts_at=(payload.starts_at or "").strip()[:40],
+        ends_at=(payload.ends_at or "").strip()[:40],
+        admin_id=int(admin.get("id") or 0),
+    )
+    _audit(admin, "announcement.create", target=str(item.get("id")), detail=f"title={title}")
+    return {"ok": True, "announcement": item}
+
+
+@app.post("/api/admin/announcements/{announcement_id}/active")
+def admin_announcement_active(
+    announcement_id: int,
+    payload: AnnouncementActiveChange,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """启用/停发公告。"""
+    if not store.set_announcement_active(announcement_id, bool(payload.active)):
+        raise HTTPException(status_code=404, detail="公告不存在")
+    _audit(
+        admin,
+        "announcement.set_active",
+        target=str(announcement_id),
+        detail=f"active={int(bool(payload.active))}",
+    )
+    return {"ok": True, "active": bool(payload.active)}
+
+
+@app.post("/api/admin/notices")
+def admin_send_notice(payload: NoticeRequest, admin: dict = Depends(current_admin)) -> dict:
+    """发送站内通知；未指定用户则发给全体活跃用户。"""
+    message = (payload.message or "").strip()[:500]
+    if not message:
+        raise HTTPException(status_code=400, detail="请填写通知内容")
+    count = store.broadcast_notice(payload.user_ids, message)
+    _audit(
+        admin,
+        "notice.broadcast",
+        target="all" if not payload.user_ids else f"{len(payload.user_ids)}users",
+        detail=message[:120],
+    )
+    return {"ok": True, "sent": count}
+
+
+@app.get("/api/admin/system/bindings")
+def admin_system_bindings(limit: int = 100, admin: dict = Depends(current_admin)) -> dict:
+    """微信绑定列表。"""
+    return {"items": store.admin_list_bindings(limit=limit)}
+
+
+@app.post("/api/admin/system/bindings/{user_id}/stop")
+def admin_system_binding_stop(user_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """强制下线某个用户的微信桥接。"""
+    manager.stop(user_id)
+    store.set_binding_phase(user_id, "idle")
+    _audit(admin, "binding.stop", target=str(user_id))
+    return {"ok": True}
+
+
+@app.get("/api/admin/system/tasks")
+def admin_system_tasks(
+    status: str = "", limit: int = 100, admin: dict = Depends(current_admin)
+) -> dict:
+    return {"items": store.admin_list_tasks(status=status, limit=limit)}
+
+
+@app.post("/api/admin/system/tasks/{task_id}/retry")
+def admin_system_task_retry(task_id: str, admin: dict = Depends(current_admin)) -> dict:
+    """重试失败/中断的任务。"""
+    if not store.retry_task(task_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    _audit(admin, "task.retry", target=task_id)
+    return {"ok": True}
+
+
+@app.get("/api/admin/system/health")
+def admin_system_health(admin: dict = Depends(current_admin)) -> dict:
+    """系统健康：运行时长、用户计数与 outbox 队列。"""
+    data = observability.snapshot()
+    db = store.db_path()
+    size = db.stat().st_size if db.exists() else 0
+    return {
+        "status": "ok",
+        "uptime_seconds": data.get("uptime_seconds"),
+        "users": store.count_users(),
+        "db_size": int(size),
+        "outbox": store.outbox_stats(),
+        "tasks": store.admin_list_tasks(limit=500),
+    }
+
+
+@app.get("/api/admin/system/flags")
+def admin_system_flags(admin: dict = Depends(current_admin)) -> dict:
+    return {"flags": store.get_feature_flags()}
+
+
+@app.put("/api/admin/system/flags/{key}")
+def admin_system_flag_update(
+    key: str, payload: FeatureFlagUpdate, admin: dict = Depends(current_admin)
+) -> dict:
+    """切换功能开关。"""
+    result = store.set_feature_flag(key, 1 if payload.value else 0, admin.get("username") or "")
+    if result is None:
+        raise HTTPException(status_code=404, detail="开关不存在")
+    _audit(
+        admin, "flag.set", target=str(key), detail=f"value={result.get('value')}"
+    )
+    return {"ok": True, **result}
+
+
+@app.get("/api/admin/system/backups")
+def admin_system_backups(limit: int = 100, admin: dict = Depends(current_admin)) -> dict:
+    """备份文件列表（只读，不提供后台触发备份）。"""
+    return {"items": store.list_backups(limit=limit)}
+
+
+@app.get("/api/admin/admins")
+def admin_list(admin: dict = Depends(current_admin)) -> dict:
+    return {"items": [_public_admin(item) for item in store.list_admins()]}
+
+
+@app.post("/api/admin/admins")
+def admin_create(payload: AdminCreateRequest, admin: dict = Depends(current_admin)) -> dict:
+    """新建管理员账号。"""
+    username = (payload.username or "").strip()
+    if not username or not payload.password:
+        raise HTTPException(status_code=400, detail="请填写用户名与密码")
+    try:
+        created = accounts.create_admin(
+            username, payload.password, name=(payload.name or "").strip()
+        )
+    except accounts.AccountError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+    _audit(admin, "admin.create", target=str(created.get("id")), detail=f"username={username}")
+    return {"ok": True, "admin": _public_admin(created)}
+
+
+@app.post("/api/admin/admins/{admin_id}/status")
+def admin_set_admin_status(
+    admin_id: int, payload: AdminStatusChange, admin: dict = Depends(current_admin)
+) -> dict:
+    """启用/停用管理员。"""
+    status = (payload.status or "").strip().lower()
+    if status not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="状态只能是 active 或 disabled")
+    if int(admin_id) == int(admin.get("id") or 0) and status == "disabled":
+        raise HTTPException(status_code=400, detail="不能停用当前登录账号")
+    if store.get_admin(admin_id) is None:
+        raise HTTPException(status_code=404, detail="管理员不存在")
+    store.set_admin_status(admin_id, status)
+    _audit(admin, "admin.set_status", target=str(admin_id), detail=f"status={status}")
+    return {"ok": True, "status": status}
+
+
+@app.post("/api/admin/admins/{admin_id}/password")
+def admin_reset_admin_password(
+    admin_id: int, payload: AdminCredentialReset, admin: dict = Depends(current_admin)
+) -> dict:
+    """重置管理员密码并注销其会话。"""
+    target = store.get_admin(admin_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="管理员不存在")
+    try:
+        accounts.set_admin_password(admin_id, payload.password or "")
+    except accounts.AccountError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.message) from error
+    store.delete_admin_sessions(admin_id)
+    _audit(
+        admin, "admin.reset_password", target=str(admin_id),
+        detail=f"username={target.get('username')}",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/admin/admins/{admin_id}/totp")
+def admin_reset_admin_totp(admin_id: int, admin: dict = Depends(current_admin)) -> dict:
+    """重置管理员双因素。"""
+    if not store.reset_admin_totp(admin_id):
+        raise HTTPException(status_code=404, detail="管理员不存在")
+    _audit(admin, "admin.reset_totp", target=str(admin_id))
+    return {"ok": True}
 
 
 @app.get("/api/admin/reports")
@@ -3943,7 +4303,7 @@ def admin_save_package(
 def public_config() -> dict:
     return {
         "site_name": "念念 Nian",
-        "wechat_login_enabled": wechat_login.enabled(),
+        "wechat_login_enabled": wechat_login.enabled() and store.feature_flag_enabled("wechat_login"),
     }
 
 

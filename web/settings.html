@@ -12,6 +12,7 @@
 </head>
 <body>
   <div class="shell" style="padding-top:22px">
+    <div id="announceBar"></div>
     <section class="glass card phf block stagger" id="profileHero" role="button" tabindex="0" aria-label="编辑资料">
       <div class="ph-top">
         <div class="phf-ring avatar-wrap">
@@ -414,6 +415,30 @@
         });
     }
 
+    async function renderAnnouncements() {
+      const host = $("announceBar");
+      if (!host) return;
+      let items = [];
+      try { items = (await api("/api/announcements")).items || []; } catch (e) { items = []; }
+      items = items.filter((item) => {
+        try { return !sessionStorage.getItem("announce:" + item.id); } catch (e) { return true; }
+      });
+      if (!items.length) { host.innerHTML = ""; return; }
+      host.innerHTML = items.map((item) => `<div class="glass card notice info" data-announce="${escapeHtml(String(item.id))}">
+        <div class="notice-head">${icon("bell")}<span><b>${escapeHtml(item.title || "公告")}</b></span></div>
+        <div class="mini" style="margin:2px 0 0 24px">${escapeHtml(item.body || "")}</div>
+        <div class="notice-foot"><button class="btn small ghost" data-ann-close="${escapeHtml(String(item.id))}">知道了</button></div>
+      </div>`).join("");
+      host.querySelectorAll("[data-ann-close]").forEach((btn) => {
+        btn.onclick = () => {
+          const id = btn.dataset.annClose;
+          try { sessionStorage.setItem("announce:" + id, "1"); } catch (e) { /* 忽略 */ }
+          const card = host.querySelector('[data-announce="' + id + '"]');
+          if (card) card.remove();
+        };
+      });
+    }
+
     async function load() {
       const data = await me();
       const user = data.user || {};
@@ -441,6 +466,7 @@
 
       const credits = await api("/api/credits");
       renderCredits(credits);
+      await renderAnnouncements();
       await refreshTwofa();
     }
 

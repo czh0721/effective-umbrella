@@ -329,6 +329,45 @@ def main():
     note = client.post(f"/api/admin/users/{user_id}/note", json={"note": "e2e 备注", "tags": "e2e"})
     check("后台写用户备注 200", note.status_code == 200, note.text[:120])
 
+    # 16b. 后台扩展 P1：内容 / 运营 / 系统 / 管理员
+    content = client.get("/api/admin/content/personas?limit=200")
+    check("内容人格列表 200", content.status_code == 200, content.text[:120])
+    persona_stop = client.post(f"/api/admin/content/personas/{pid}/status", json={"status": "disabled"})
+    check("后台停用人格 200", persona_stop.status_code == 200, persona_stop.text[:120])
+    check("人格已停用", store.get_persona(user_id, pid)["status"] == "disabled")
+    persona_restore = client.post(f"/api/admin/content/personas/{pid}/status", json={"status": "ready"})
+    check("后台恢复人格 200", persona_restore.status_code == 200, persona_restore.text[:120])
+    check("人格已恢复", store.get_persona(user_id, pid)["status"] == "ready")
+    moments = client.get("/api/admin/content/moments?limit=200")
+    check("内容朋友圈列表 200", moments.status_code == 200, moments.text[:120])
+    announce = client.post("/api/admin/announcements", json={"title": "e2e 公告", "body": "正文"})
+    check("发布公告 200", announce.status_code == 200, announce.text[:120])
+    notice = client.post("/api/admin/notices", json={"message": "e2e 通知", "user_ids": [user_id]})
+    check("发送站内通知 200", notice.status_code == 200 and notice.json().get("sent") == 1, notice.text[:120])
+    flags = client.get("/api/admin/system/flags")
+    check("功能开关列表 200",
+          flags.status_code == 200 and "moments_auto" in (flags.json().get("flags") or {}),
+          flags.text[:120])
+    flag_set = client.put("/api/admin/system/flags/moments_auto", json={"value": True})
+    check("切换功能开关 200", flag_set.status_code == 200, flag_set.text[:120])
+    backups = client.get("/api/admin/system/backups")
+    check("备份列表只读 200",
+          backups.status_code == 200 and isinstance(backups.json().get("items"), list),
+          backups.text[:120])
+    system_health = client.get("/api/admin/system/health")
+    check("系统健康 200",
+          system_health.status_code == 200 and system_health.json().get("status") == "ok",
+          system_health.text[:120])
+    admins = client.get("/api/admin/admins")
+    check("管理员列表 200", admins.status_code == 200, admins.text[:120])
+    new_admin = client.post("/api/admin/admins", json={"username": "e2e-helper", "password": "password123"})
+    check("创建管理员 200或已存在", new_admin.status_code in (200, 409), new_admin.text[:120])
+    audit = client.get("/api/admin/audit")
+    check("审计含新动作",
+          any(str(i.get("action", "")).startswith(("persona.", "announcement.", "flag."))
+              for i in (audit.json().get("items") or [])),
+          audit.text[:120])
+
     # 17. 通知中心
     notes = client.get("/api/notifications").json()
     check("通知中心有记录", len(notes["items"]) >= 1, f"unread={notes['unread']}")

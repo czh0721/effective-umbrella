@@ -139,11 +139,27 @@
         notes.push({ tone: "info", text: "还没有绑定微信，扫码后 ta 才能收到消息。",
           action: { label: "去绑定", href: "/app/agent/" + unbound.id } });
       }
-      if (!notes.length) { host.innerHTML = ""; return; }
-      host.innerHTML = notes.map((n) => `<div class="glass card notice ${n.tone}">
+      const announcements = (state.announcements || []).filter((item) => {
+        try { return !sessionStorage.getItem("announce:" + item.id); } catch (e) { return true; }
+      });
+      const annHtml = announcements.map((item) => `<div class="glass card notice info" data-announce="${escapeHtml(String(item.id))}">
+        <div class="notice-head">${icon("bell")}<span><b>${escapeHtml(item.title || "公告")}</b></span></div>
+        <div class="mini" style="margin:2px 0 0 24px">${escapeHtml(item.body || "")}</div>
+        <div class="notice-foot"><button class="btn small ghost" data-ann-close="${escapeHtml(String(item.id))}">知道了</button></div>
+      </div>`).join("");
+      if (!notes.length && !annHtml) { host.innerHTML = ""; return; }
+      host.innerHTML = annHtml + notes.map((n) => `<div class="glass card notice ${n.tone}">
         <div class="notice-head">${icon("warning")}<span>${escapeHtml(n.text)}</span></div>
         ${n.action ? `<div class="notice-foot"><a class="btn small primary" href="${n.action.href}">${escapeHtml(n.action.label)}</a></div>` : ""}
       </div>`).join("");
+      host.querySelectorAll("[data-ann-close]").forEach((btn) => {
+        btn.onclick = () => {
+          const id = btn.dataset.annClose;
+          try { sessionStorage.setItem("announce:" + id, "1"); } catch (e) { /* 忽略 */ }
+          const card = host.querySelector('[data-announce="' + id + '"]');
+          if (card) card.remove();
+        };
+      });
     }
 
     function render() {
@@ -168,8 +184,11 @@
 
     async function load() {
       $("agentList").innerHTML = skeletonCards(3);
-      const data = await me();
-      state = { personas: data.personas, presets: data.presets || [], user: data.user };
+      const [data, ann] = await Promise.all([
+        me(),
+        api("/api/announcements").catch(() => ({ items: [] })),
+      ]);
+      state = { personas: data.personas, presets: data.presets || [], user: data.user, announcements: ann.items || [] };
       renderStats();
       renderCredits(data.credits, (data.config || {}).platform_available);
       renderNotice(data);

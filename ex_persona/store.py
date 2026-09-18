@@ -600,6 +600,12 @@ def init_db() -> None:
             _migrate_credit_expiry(conn)
             _migrate_admin_split(conn)
             _migrate_admin_console(conn)
+            seed_at = utcnow()
+            conn.executemany(
+                "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
+                " VALUES (?, ?, ?, '')",
+                [(key, value, seed_at) for key, value in FEATURE_FLAG_DEFAULTS.items()],
+            )
         _initialized = True
 
 
@@ -1183,6 +1189,424 @@ def orders_revenue(days: int = 30) -> dict:
     trend = dashboard_trend(span)
     totals["trend"] = [{"date": item["date"], "revenue": item["revenue"]} for item in trend]
     return totals
+
+
+# --------------------------------------------------------------------------- #
+# 后台扩展 P1：内容审核 / 运营投放 / 系统运维 / 管理员
+# --------------------------------------------------------------------------- #
+
+# 缺省为开启：开关上线前这些功能本就可用，避免新增开关导致功能被静默关闭。
+FEATURE_FLAG_DEFAULTS = {"moments_auto": 1, "wechat_login": 1, "platform_model": 1}
+FEATURE_FLAG_KEYS = tuple(FEATURE_FLAG_DEFAULTS)
+ANNOUNCEMENT_AUDIENCES = {"all"}
+
+
+def search_personas(
+    query: str = "", status: str = "", user_id: int | None = None, limit: int = 100
+) -> list[dict]:
+    """管理员视角的人格列表：带归属用户与内容计数。"""
+    _ensure()
+    sql = (
+        "SELECT p.*, u.username AS username, u.nickname AS nickname,"
+        " u.status AS user_status,"
+        " (SELECT COUNT(*) FROM memories m WHERE m.persona_id = p.id) AS memory_count,"
+        " (SELECT COUNT(*) FROM moments mo WHERE mo.persona_id = p.id) AS moment_count,"
+        " (SELECT COUNT(*) FROM chat_turns t WHERE t.persona_id = p.id) AS turn_count"
+        " FROM personas p LEFT JOIN users u ON u.id = p.user_id WHERE 1 = 1"
+    )
+    params: list = []
+    text = (query or "").strip()
+    if text:
+        like = f"%{text}%"
+        sql += " AND (p.name LIKE ? OR p.target_name LIKE ? OR u.username LIKE ?)"
+        params += [like, like, like]
+    if status:
+        sql += " AND p.status = ?"
+        params.append(status)
+    if user_id is not None:
+        sql += " AND p.user_id = ?"
+        params.append(int(user_id))
+    sql += " ORDER BY p.id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 100), 500)))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def persona_overview(persona_id: int) -> dict | None:
+    """人格详情：归属用户、状态与内容计数。"""
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT p.*, u.username AS username, u.nickname AS nickname,"
+            " u.status AS user_status FROM personas p"
+            " LEFT JOIN users u ON u.id = p.user_id WHERE p.id = ?",
+            (int(persona_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+
+        def scalar(sql: str, params: tuple = ()) -> int:
+            found = conn.execute(sql, params).fetchone()
+            return int(found[0]) if found and found[0] is not None else 0
+
+        data["counts"] = {
+            "memories": scalar(
+                "SELECT COUNT(*) FROM memories WHERE persona_id = ?", (persona_id,)
+            ),
+            "moments": scalar("SELECT COUNT(*) FROM moments WHERE persona_id = ?", (persona_id,)),
+            "turns": scalar(
+                "SELECT COUNT(*) FROM chat_turns WHERE persona_id = ?", (persona_id,)
+            ),
+            "stickers": scalar(
+                "SELECT COUNT(*) FROM stickers WHERE persona_id = ?", (persona_id,)
+            ),
+        }
+    return data
+
+
+def set_persona_status(persona_id: int, status: str) -> dict | None:
+    """管理员停用/恢复人格。停用会同时摘掉激活标记，恢复只回到 ready。"""
+    _ensure()
+    status = (status or "").strip()
+    if status not in {"ready", "disabled"}:
+        return None
+    now = utcnow()
+    with _lock, connect() as conn:
+        row = conn.execute(
+            "SELECT id, user_id FROM personas WHERE id = ?", (int(persona_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        if status == "disabled":
+            conn.execute(
+                "UPDATE personas SET status = ?, is_active = 0, updated_at = ? WHERE id = ?",
+                (status, now, int(persona_id)),
+            )
+        else:
+            conn.execute(
+                "UPDATE personas SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, int(persona_id)),
+            )
+    return {"id": int(persona_id), "user_id": int(row["user_id"]), "status": status}
+
+
+def admin_list_moments(
+    query: str = "",
+    from_iso: str = "",
+    to_iso: str = "",
+    hidden: int | None = None,
+    limit: int = 100,
+) -> list[dict]:
+    """内容审核：跨用户朋友圈列表，可按关键词、时间与隐藏状态过滤。"""
+    _ensure()
+    sql = (
+        "SELECT m.*, u.username AS username, p.name AS persona_name,"
+        " (SELECT COUNT(*) FROM moment_likes l WHERE l.moment_id = m.id) AS like_count,"
+        " (SELECT COUNT(*) FROM moment_comments c WHERE c.moment_id = m.id) AS comment_count"
+        " FROM moments m LEFT JOIN users u ON u.id = m.user_id"
+        " LEFT JOIN personas p ON p.id = m.persona_id WHERE 1 = 1"
+    )
+    params: list = []
+    text = (query or "").strip()
+    if text:
+        like = f"%{text}%"
+        sql += " AND (m.content LIKE ? OR u.username LIKE ?)"
+        params += [like, like]
+    if from_iso:
+        sql += " AND m.created_at >= ?"
+        params.append(from_iso)
+    if to_iso:
+        sql += " AND m.created_at <= ?"
+        params.append(to_iso)
+    if hidden is not None:
+        sql += " AND m.hidden = ?"
+        params.append(1 if int(hidden) else 0)
+    sql += " ORDER BY m.id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 100), 500)))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_moment_hidden(moment_id: int, hidden: bool) -> dict | None:
+    """软删除/恢复朋友圈内容；被隐藏的内容不再出现在用户端。"""
+    _ensure()
+    with _lock, connect() as conn:
+        row = conn.execute(
+            "SELECT id, user_id FROM moments WHERE id = ?", (int(moment_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE moments SET hidden = ? WHERE id = ?",
+            (1 if hidden else 0, int(moment_id)),
+        )
+    return {
+        "id": int(moment_id),
+        "user_id": int(row["user_id"]),
+        "hidden": bool(hidden),
+    }
+
+
+def void_redemption_code(code_id: int) -> dict | None:
+    """作废一张未使用的兑换码；已兑换的保持原状。"""
+    _ensure()
+    with _lock, connect() as conn:
+        row = conn.execute(
+            "SELECT id, status FROM redemption_codes WHERE id = ?", (int(code_id),)
+        ).fetchone()
+        if row is None:
+            return None
+        if (row["status"] or "") != "unused":
+            return {"id": int(code_id), "status": row["status"], "voided": False}
+        conn.execute("UPDATE redemption_codes SET status = 'void' WHERE id = ?", (int(code_id),))
+    return {"id": int(code_id), "status": "void", "voided": True}
+
+
+def admin_list_credit_batches(
+    query: str = "", from_iso: str = "", to_iso: str = "", limit: int = 100
+) -> list[dict]:
+    """积分批次列表（跨用户），用于核对发放与到期。"""
+    _ensure()
+    sql = (
+        "SELECT b.*, u.username AS username FROM credit_batches b"
+        " LEFT JOIN users u ON u.id = b.user_id WHERE 1 = 1"
+    )
+    params: list = []
+    text = (query or "").strip()
+    if text:
+        sql += " AND u.username LIKE ?"
+        params.append(f"%{text}%")
+    if from_iso:
+        sql += " AND b.created_at >= ?"
+        params.append(from_iso)
+    if to_iso:
+        sql += " AND b.created_at <= ?"
+        params.append(to_iso)
+    sql += " ORDER BY b.id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 100), 500)))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_announcement(
+    title: str,
+    body: str,
+    audience: str = "all",
+    starts_at: str = "",
+    ends_at: str = "",
+    admin_id: int = 0,
+) -> dict:
+    """新建公告；``active`` 默认开启，时间窗留空表示长期有效。"""
+    _ensure()
+    audience = audience if audience in ANNOUNCEMENT_AUDIENCES else "all"
+    now = utcnow()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO announcements (title, body, audience, starts_at, ends_at, active,"
+            " admin_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (title, body, audience, starts_at, ends_at, int(admin_id), now, now),
+        )
+        new_id = int(cursor.lastrowid or 0)
+    return get_announcement(new_id) or {}
+
+
+def get_announcement(announcement_id: int) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM announcements WHERE id = ?", (int(announcement_id),)
+        ).fetchone()
+    return _row(row)
+
+
+def list_announcements(limit: int = 100) -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM announcements ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit or 100), 500)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def active_announcements(now: str = "") -> list[dict]:
+    """当前生效的公告：active=1 且落在时间窗内（空值视为不限制）。"""
+    _ensure()
+    stamp = now or utcnow()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, title, body, audience, starts_at, ends_at, created_at"
+            " FROM announcements WHERE active = 1"
+            " AND (starts_at = '' OR starts_at <= ?)"
+            " AND (ends_at = '' OR ends_at >= ?)"
+            " ORDER BY id DESC LIMIT 50",
+            (stamp, stamp),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_announcement_active(announcement_id: int, active: bool) -> bool:
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "UPDATE announcements SET active = ?, updated_at = ? WHERE id = ?",
+            (1 if active else 0, utcnow(), int(announcement_id)),
+        )
+        return bool(cursor.rowcount)
+
+
+def broadcast_notice(user_ids: list[int] | None, message: str, kind: str = "notice") -> int:
+    """发送站内通知；``user_ids`` 为空表示全体活跃用户。"""
+    _ensure()
+    text = (message or "").strip()
+    if not text:
+        return 0
+    now = utcnow()
+    with _lock, connect() as conn:
+        if user_ids:
+            targets = [int(uid) for uid in user_ids]
+        else:
+            rows = conn.execute(
+                "SELECT id FROM users WHERE COALESCE(status, 'active') = 'active'"
+            ).fetchall()
+            targets = [int(row["id"]) for row in rows]
+        if not targets:
+            return 0
+        conn.executemany(
+            "INSERT INTO alerts (user_id, kind, message, read_at, created_at)"
+            " VALUES (?, ?, ?, '', ?)",
+            [(uid, kind or "notice", text, now) for uid in targets],
+        )
+        return len(targets)
+
+
+def admin_list_bindings(limit: int = 100) -> list[dict]:
+    """微信绑定列表：带用户名与当前绑定人格。"""
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT b.*, u.username AS username, p.name AS persona_name"
+            " FROM wechat_bindings b LEFT JOIN users u ON u.id = b.user_id"
+            " LEFT JOIN personas p ON p.id = b.persona_id"
+            " ORDER BY b.updated_at DESC LIMIT ?",
+            (max(1, min(int(limit or 100), 500)),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def admin_list_tasks(status: str = "", limit: int = 100) -> list[dict]:
+    """任务列表（跨用户），可按状态过滤。"""
+    _ensure()
+    sql = (
+        "SELECT t.*, u.username AS username FROM tasks t"
+        " LEFT JOIN users u ON u.id = t.user_id WHERE 1 = 1"
+    )
+    params: list = []
+    if status:
+        sql += " AND t.status = ?"
+        params.append(status)
+    sql += " ORDER BY t.created_at DESC, t.id DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 100), 500)))
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_decode_task(row) or {} for row in rows]
+
+
+def retry_task(task_id: str) -> bool:
+    """把手动重试的任务重新排队：清空错误并回到 pending。"""
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "UPDATE tasks SET status = 'pending', progress = 0, message = ?, error = '',"
+            " error_kind = '', updated_at = ? WHERE id = ?",
+            ("已重新排队", utcnow(), str(task_id)),
+        )
+        return bool(cursor.rowcount)
+
+
+def backup_dir() -> Path:
+    """备份目录：默认取数据目录同级 ``backups``，可用环境变量覆盖。"""
+    override = os.environ.get("PERSONA_BACKUP_DIR", "").strip()
+    if override:
+        return Path(override)
+    return db_path().parent.parent / "backups"
+
+
+def list_backups(limit: int = 100) -> list[dict]:
+    """只读备份列表：文件名、大小与生成时间，按时间倒序。"""
+    directory = backup_dir()
+    if not directory.is_dir():
+        return []
+    items: list[dict] = []
+    for entry in directory.iterdir():
+        if not entry.is_file() or entry.suffix != ".db":
+            continue
+        try:
+            stat = entry.stat()
+        except OSError:
+            continue
+        items.append(
+            {
+                "name": entry.name,
+                "size": int(stat.st_size),
+                "mtime": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                .replace(tzinfo=None)
+                .isoformat(timespec="seconds"),
+            }
+        )
+    items.sort(key=lambda item: item["mtime"], reverse=True)
+    return items[: max(1, min(int(limit or 100), 500))]
+
+
+def get_feature_flags() -> dict:
+    """功能开关：返回全部已知键，缺省为开启。"""
+    _ensure()
+    flags = dict(FEATURE_FLAG_DEFAULTS)
+    with connect() as conn:
+        rows = conn.execute("SELECT key, value FROM feature_flags").fetchall()
+    for row in rows:
+        flags[str(row["key"])] = int(row["value"] or 0)
+    return flags
+
+
+def feature_flag_enabled(key: str) -> bool:
+    """读取单个功能开关；未知键按开启处理，保证功能不被误关。"""
+    if key not in FEATURE_FLAG_DEFAULTS:
+        return True
+    return bool(get_feature_flags().get(key))
+
+
+def set_feature_flag(key: str, value: int, updated_by: str = "") -> dict | None:
+    """写入功能开关；未知键返回 None。"""
+    _ensure()
+    key = (key or "").strip()
+    if key not in FEATURE_FLAG_KEYS:
+        return None
+    flag = 1 if int(value) else 0
+    now = utcnow()
+    with _lock, connect() as conn:
+        conn.execute(
+            "INSERT INTO feature_flags (key, value, updated_at, updated_by)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
+            " updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+            (key, flag, now, updated_by or ""),
+        )
+    return {"key": key, "value": flag}
+
+
+def reset_admin_totp(admin_id: int) -> bool:
+    """重置管理员双因素：清空密钥并关闭，下次登录不再要求动态码。"""
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "UPDATE admins SET totp_secret = '', totp_enabled = 0 WHERE id = ?",
+            (int(admin_id),),
+        )
+        return bool(cursor.rowcount)
 
 
 def set_user_username(user_id: int, username: str, password_hash: str, password_salt: str) -> None:
@@ -2226,7 +2650,7 @@ def list_moments(
         " (SELECT COUNT(*) FROM moment_comments c WHERE c.moment_id = m.id) AS comment_count,"
         " EXISTS(SELECT 1 FROM moment_likes l WHERE l.moment_id = m.id AND l.user_id = ?)"
         " AS liked"
-        " FROM moments m WHERE m.persona_id = ? AND m.user_id = ?"
+        " FROM moments m WHERE m.hidden = 0 AND m.persona_id = ? AND m.user_id = ?"
     )
     params: list = [user_id, persona_id, user_id]
     if before_id and int(before_id) > 0:
@@ -2934,12 +3358,37 @@ def add_audit(
         return int(cursor.lastrowid or 0)
 
 
-def list_audit(limit: int = 100) -> list[dict]:
+def list_audit(
+    limit: int = 100,
+    actor: str = "",
+    action: str = "",
+    target: str = "",
+    from_iso: str = "",
+    to_iso: str = "",
+) -> list[dict]:
+    """审计列表：支持按操作人、动作、目标与时间范围筛选。"""
     _ensure()
+    sql = "SELECT * FROM admin_audit WHERE 1 = 1"
+    params: list = []
+    if actor:
+        sql += " AND actor LIKE ?"
+        params.append(f"%{actor}%")
+    if action:
+        sql += " AND action LIKE ?"
+        params.append(f"%{action}%")
+    if target:
+        sql += " AND target LIKE ?"
+        params.append(f"%{target}%")
+    if from_iso:
+        sql += " AND created_at >= ?"
+        params.append(from_iso)
+    if to_iso:
+        sql += " AND created_at <= ?"
+        params.append(to_iso)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(max(int(limit or 100), 1))
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM admin_audit ORDER BY id DESC LIMIT ?", (max(int(limit), 1),)
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return [dict(row) for row in rows]
 
 

@@ -141,6 +141,9 @@ class MomentScheduler:
                 continue
 
     def tick(self, now: datetime | None = None) -> None:
+        # 后台功能开关可一键停掉朋友圈自动发布（用户端已发布内容不受影响）。
+        if not store.feature_flag_enabled("moments_auto"):
+            return
         now = now or clock.now_local()
         now_ts = now.timestamp()
         day = now.strftime("%Y-%m-%d")

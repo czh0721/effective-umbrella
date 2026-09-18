@@ -38,6 +38,9 @@ const ICON_PATHS = {
   refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/>',
   menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
   gift: '<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v8h14v-8"/><path d="M12 8v12"/><path d="M12 8S11 4 8 4a2 2 0 0 0 0 4h4zM12 8s1-4 4-4a2 2 0 0 1 0 4h-4z"/>',
+  eye: '<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"/><circle cx="12" cy="12" r="2.6"/>',
+  "eye-off": '<path d="M3 3l18 18"/><path d="M10.6 6.1A9.7 9.7 0 0 1 12 6c6.4 0 10 6 10 6a17 17 0 0 1-2.6 3.3"/><path d="M6.4 6.5A17 17 0 0 0 2 12s3.6 6 10 6a9.4 9.4 0 0 0 3.6-.7"/><path d="M9.5 9.6a2.6 2.6 0 0 0 3.6 3.6"/>',
+  shield: '<path d="M12 3l8 3v6c0 4.4-3.2 7.8-8 9-4.8-1.2-8-4.6-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
 };
 function icon(name, cls = "ic") {
   const path = ICON_PATHS[name] || "";
