@@ -204,6 +204,16 @@
             <div class="acard-head" id="announceListHead"></div>
             <div id="announceList"></div>
           </div>
+          <div class="grid-2">
+            <div class="acard">
+              <div class="acard-head" id="templateHead"></div>
+              <div id="templateForm"></div>
+            </div>
+            <div class="acard">
+              <div class="acard-head" id="noticeHistoryHead"></div>
+              <div id="noticeHistory"></div>
+            </div>
+          </div>
         </section>
 
         <section class="panel" id="panel-credits">
@@ -376,6 +386,8 @@
       reportFilter: "all", auditAction: "all", userQuery: "", auditQuery: "",
       personas: [], moments: [], contentKind: "personas", contentQuery: "",
       announcements: [], admins: [], flags: {}, bindings: [], backups: [], tasks: [],
+      noticeTemplates: [], noticeHistory: [], noticeVariables: {}, audienceCount: null,
+      editingAnnouncement: null, noticeAudience: "all", noticeRender: false,
       locked: [],
       alertItems: null, alertKind: "", alertStatus: "unread",
       logItems: [], logLevel: "", logKeyword: "",
@@ -1001,60 +1013,362 @@
     }
 
     /* ---------------------------------------------------------------- ops */
+    const SEGMENT_OPTIONS = [
+      ["all", "全体"],
+      ["active", "活跃用户（近30天）"],
+      ["paid", "付费用户"],
+      ["new", "新用户（近7天）"],
+      ["tag", "按标签"],
+      ["manual", "指定用户ID"],
+    ];
+    const SEGMENT_LABELS = Object.fromEntries(SEGMENT_OPTIONS);
+
+    function segmentOptions(selected) {
+      return SEGMENT_OPTIONS.map(([value, text]) =>
+        `<option value="${value}" ${selected === value ? "selected" : ""}>${text}</option>`).join("");
+    }
+    function toLocalInput(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (isNaN(date)) return String(value).slice(0, 16);
+      const p = (n) => String(n).padStart(2, "0");
+      return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+    }
+    function audienceText(kind, value) {
+      const label = SEGMENT_LABELS[kind] || "全体";
+      if (kind === "tag" && value) return `${label}：${value}`;
+      if (kind === "manual" && value) return `指定 ${value.split(",").filter(Boolean).length} 人`;
+      return label;
+    }
+
     function renderOps() {
-      $("announceHead").innerHTML = headIcon("bell", "发布公告");
+      renderAnnounceEditor();
+      renderNoticeEditor();
+      renderAnnounceList();
+      renderNoticeTemplates();
+      renderNoticeHistory();
+    }
+
+    function renderAnnounceEditor() {
+      const editing = state.editingAnnouncement;
+      const a = editing || {};
+      $("announceHead").innerHTML = headIcon("bell", editing ? `编辑公告 #${a.id}` : "发布公告");
       $("announceForm").innerHTML = `
         <div class="form-grid">
-          <div class="field full"><label>标题</label><input id="anTitle" placeholder="公告标题" /></div>
-          <div class="field full"><label>内容</label><textarea id="anBody" rows="4" placeholder="公告正文"></textarea></div>
-          <div class="field"><label>开始时间（可选）</label><input id="anStart" placeholder="ISO，如 2026-09-18T00:00:00" /></div>
-          <div class="field"><label>结束时间（可选）</label><input id="anEnd" placeholder="留空表示长期有效" /></div>
+          <div class="field full"><label>标题 <span id="anTitleCount" class="muted"></span></label><input id="anTitle" maxlength="120" value="${escapeHtml(a.title || "")}" placeholder="公告标题" /></div>
+          <div class="field"><label>类型</label><select id="anKind" class="select">
+            ${[["info", "通知"], ["update", "更新"], ["activity", "活动"]].map(([v, t]) => `<option value="${v}" ${(a.kind || "info") === v ? "selected" : ""}>${t}</option>`).join("")}
+          </select></div>
+          <div class="field"><label>优先级</label><select id="anPriority" class="select">
+            ${[["normal", "普通"], ["high", "高"]].map(([v, t]) => `<option value="${v}" ${(a.priority || "normal") === v ? "selected" : ""}>${t}</option>`).join("")}
+          </select></div>
+          <div class="field"><label>受众</label><select id="anAudience" class="select">${segmentOptions(a.audience || "all")}</select></div>
+          <div class="field"><label>受众参数</label><input id="anAudienceValue" value="${escapeHtml(a.audience_value || "")}" placeholder="标签名或 5,12" /></div>
+          <div class="field"><label>置顶</label><label class="switch-line"><input type="checkbox" id="anPinned" ${a.pinned ? "checked" : ""}/> 置顶展示</label></div>
+          <div class="field"><label>开始时间</label><input type="datetime-local" id="anStart" value="${toLocalInput(a.starts_at)}" /></div>
+          <div class="field"><label>结束时间</label><input type="datetime-local" id="anEnd" value="${toLocalInput(a.ends_at)}" /></div>
+          <div class="field full"><label>摘要</label><input id="anSummary" maxlength="200" value="${escapeHtml(a.summary || "")}" placeholder="列表摘要（可选）" /></div>
+          <div class="field"><label>跳转链接</label><input id="anLinkUrl" maxlength="500" value="${escapeHtml(a.link_url || "")}" placeholder="https://" /></div>
+          <div class="field"><label>链接文案</label><input id="anLinkText" maxlength="40" value="${escapeHtml(a.link_text || "")}" placeholder="查看详情" /></div>
+          <div class="field full"><label>正文 <span id="anBodyCount" class="muted"></span></label><textarea id="anBody" rows="4" maxlength="4000" placeholder="公告正文">${escapeHtml(a.body || "")}</textarea></div>
         </div>
-        <div class="btnrow"><button class="btn primary wide" id="announceCreate">发布公告</button></div>`;
+        <div class="preview-card" id="anPreview"></div>
+        <div class="btnrow">
+          ${editing ? '<button class="btn ghost" id="anCancel">取消编辑</button>' : ""}
+          <button class="btn" id="announceDraft">存为草稿</button>
+          <button class="btn primary" id="announceCreate">${editing ? "保存发布" : "发布公告"}</button>
+        </div>`;
+
+      const updatePreview = () => {
+        const title = $("anTitle").value.trim() || "公告标题";
+        const body = $("anBody").value.trim() || "公告正文将在这里预览";
+        const summary = $("anSummary").value.trim();
+        const link = $("anLinkText").value.trim() || $("anLinkUrl").value.trim();
+        const pinned = $("anPinned").checked;
+        const kindLabel = { info: "通知", update: "更新", activity: "活动" }[$("anKind").value] || "通知";
+        $("anPreview").innerHTML = `
+          <div class="preview-label">用户端预览</div>
+          <div class="preview-card-inner">
+            <div class="preview-title">${pinned ? '<span class="tag resolved">置顶</span> ' : ""}${escapeHtml(title)}</div>
+            <div class="preview-meta">${escapeHtml(kindLabel)} · ${escapeHtml($("anAudience").value === "all" ? "全体" : SEGMENT_LABELS[$("anAudience").value] || "全体")}</div>
+            <div class="preview-body">${escapeHtml((summary ? summary + "\n" : "") + body)}</div>
+            ${link ? `<div class="preview-link">${escapeHtml(link)}</div>` : ""}
+          </div>`;
+        $("anTitleCount").textContent = `${$("anTitle").value.length}/120`;
+        $("anBodyCount").textContent = `${$("anBody").value.length}/4000`;
+      };
+      ["anTitle", "anBody", "anSummary", "anKind", "anPinned", "anAudience", "anLinkText", "anLinkUrl"].forEach((id) => {
+        const el = $(id); if (el) el.addEventListener("input", updatePreview);
+        if (el) el.addEventListener("change", updatePreview);
+      });
+      updatePreview();
+
+      const collect = (status) => ({
+        title: $("anTitle").value.trim(),
+        body: $("anBody").value.trim(),
+        summary: $("anSummary").value.trim(),
+        kind: $("anKind").value,
+        priority: $("anPriority").value,
+        pinned: $("anPinned").checked,
+        link_url: $("anLinkUrl").value.trim(),
+        link_text: $("anLinkText").value.trim(),
+        audience: $("anAudience").value,
+        audience_value: $("anAudienceValue").value.trim(),
+        starts_at: $("anStart").value,
+        ends_at: $("anEnd").value,
+        status,
+      });
+      const submit = async (status) => {
+        const payload = collect(status);
+        if (!payload.title) { toast("请填写公告标题"); return; }
+        try {
+          if (editing) {
+            await api(`/api/admin/announcements/${editing.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+            toast("公告已更新");
+            state.editingAnnouncement = null;
+          } else {
+            await api("/api/admin/announcements", { method: "POST", body: JSON.stringify(payload) });
+            toast(status === "draft" ? "已存为草稿" : "公告已发布");
+          }
+          await loadAll();
+        } catch (error) { toast(error.message); }
+      };
+      const btnA = $("announceCreate");
+      if (btnA) btnA.onclick = () => submit("published");
+      const btnD = $("announceDraft");
+      if (btnD) btnD.onclick = () => submit("draft");
+      const btnC = $("anCancel");
+      if (btnC) btnC.onclick = () => { state.editingAnnouncement = null; renderOps(); };
+    }
+
+    function renderNoticeEditor() {
       $("noticeHead").innerHTML = headIcon("send", "站内通知");
+      const variables = Object.keys(state.noticeVariables || {});
       $("noticeForm").innerHTML = `
         <div class="form-grid">
-          <div class="field full"><label>通知内容</label><textarea id="ntMessage" rows="4" placeholder="发送给全体活跃用户"></textarea></div>
-          <div class="field full"><label>指定用户 ID（逗号分隔，留空为全体）</label><input id="ntUsers" placeholder="例如 5,12,13" /></div>
+          <div class="field"><label>受众</label><select id="ntAudience" class="select">${segmentOptions(state.noticeAudience)}</select></div>
+          <div class="field"><label>受众参数</label><input id="ntAudienceValue" placeholder="标签名或 5,12" /></div>
+          <div class="field full"><label>模板</label><select id="ntTemplate" class="select"><option value="">不使用模板</option>${state.noticeTemplates.map((t) => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join("")}</select></div>
+          <div class="field full"><label>通知内容 <span id="ntCount" class="muted"></span></label><textarea id="ntMessage" rows="4" maxlength="500" placeholder="发送给目标受众"></textarea></div>
+          <div class="field full"><label>插入变量</label><div class="var-row">${variables.map((v) => `<button type="button" class="var-btn" data-var="${escapeHtml(v)}">${escapeHtml(v)}</button>`).join("")}</div></div>
+          <div class="field full"><label class="switch-line"><input type="checkbox" id="ntRender" ${state.noticeRender ? "checked" : ""}/> 按收件人渲染变量</label></div>
         </div>
-        <div class="btnrow"><button class="btn primary wide" id="noticeSend">发送通知</button></div>`;
+        <div class="audience-line" id="ntAudienceHint">尚未预览命中人数</div>
+        <div class="btnrow">
+          <button class="btn ghost" id="ntCountBtn">预览人数</button>
+          <button class="btn primary" id="noticeSend">发送通知</button>
+        </div>`;
 
-      $("announceListHead").innerHTML = headIcon("clock", "公告列表", `<span class="spacer"></span><span class="tag plain">${state.announcements.length} 条</span>`);
-      if (!state.announcements.length) { $("announceList").innerHTML = emptyState("暂无公告", "bell"); return; }
-      $("announceList").innerHTML = `<div class="feed">${state.announcements.map((item) => `
-        <div class="feed-item">
-          <div class="feed-dot" style="background:${item.active ? TONE.green.soft : TONE.orange.soft};color:${item.active ? TONE.green.color : TONE.orange.color}">${icon("bell")}</div>
-          <div class="feed-body">
-            <div class="feed-title">${escapeHtml(item.title || "")} ${item.active ? '<span class="tag resolved">生效中</span>' : '<span class="tag plain">已停发</span>'}</div>
-            <div class="feed-sub">${escapeHtml((item.body || "").slice(0, 120))}</div>
-            <div class="feed-time">${fmtTime(item.created_at)}${item.starts_at || item.ends_at ? " · " + escapeHtml(item.starts_at || "长期") + " ~ " + escapeHtml(item.ends_at || "长期") : ""}</div>
-          </div>
-          <button class="btn small ${item.active ? "ghost" : "primary"}" data-announce-active="${escapeHtml(String(item.id))}" data-current="${item.active ? 1 : 0}">${item.active ? "停发" : "启用"}</button>
-        </div>`).join("")}</div>`;
-
-      const btnA = $("announceCreate");
-      if (btnA) btnA.onclick = async () => {
-        const title = $("anTitle").value.trim();
-        if (!title) { toast("请填写公告标题"); return; }
+      const countEl = () => $("ntCount");
+      const bind = () => { const el = countEl(); if (el) el.textContent = `${$("ntMessage").value.length}/500`; };
+      $("ntMessage").addEventListener("input", bind);
+      bind();
+      $("ntRender").checked = state.noticeRender;
+      $("ntRender").addEventListener("change", () => { state.noticeRender = $("ntRender").checked; });
+      $("ntAudience").addEventListener("change", () => {
+        state.noticeAudience = $("ntAudience").value;
+        $("ntAudienceHint").textContent = "尚未预览命中人数";
+        state.audienceCount = null;
+      });
+      $("ntTemplate").addEventListener("change", () => {
+        const id = Number($("ntTemplate").value);
+        const found = state.noticeTemplates.find((t) => Number(t.id) === id);
+        if (found) { $("ntMessage").value = found.body || ""; bind(); }
+      });
+      document.querySelectorAll("[data-var]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const field = $("ntMessage");
+          const token = btn.dataset.var;
+          const start = field.selectionStart == null ? field.value.length : field.selectionStart;
+          const end = field.selectionEnd == null ? field.value.length : field.selectionEnd;
+          field.value = field.value.slice(0, start) + token + field.value.slice(end);
+          field.focus();
+          field.selectionStart = field.selectionEnd = start + token.length;
+          bind();
+        });
+      });
+      const countBtn = $("ntCountBtn");
+      if (countBtn) countBtn.onclick = async () => {
         try {
-          await api("/api/admin/announcements", { method: "POST", body: JSON.stringify({
-            title, body: $("anBody").value.trim(), audience: "all",
-            starts_at: $("anStart").value.trim(), ends_at: $("anEnd").value.trim(),
-          }) });
-          toast("公告已发布"); await loadAll();
+          const result = await api("/api/admin/audience/count", {
+            method: "POST",
+            body: JSON.stringify({ audience: $("ntAudience").value, audience_value: $("ntAudienceValue").value.trim() }),
+          });
+          state.audienceCount = result.count;
+          $("ntAudienceHint").textContent = `预计触达 ${result.count} 位用户`;
+          if (!result.count) toast("目标受众为空");
         } catch (error) { toast(error.message); }
       };
-      const btnN = $("noticeSend");
-      if (btnN) btnN.onclick = async () => {
+      const sendBtn = $("noticeSend");
+      if (sendBtn) sendBtn.onclick = () => {
         const message = $("ntMessage").value.trim();
         if (!message) { toast("请填写通知内容"); return; }
-        const raw = $("ntUsers").value.trim();
-        const user_ids = raw ? raw.split(/[,，\s]+/).map((v) => Number(v)).filter((v) => Number.isInteger(v) && v > 0) : null;
+        const audience = $("ntAudience").value;
+        const audienceValue = $("ntAudienceValue").value.trim();
+        const label = audienceText(audience, audienceValue);
+        const scope = state.audienceCount == null ? label : `${label}（约 ${state.audienceCount} 人）`;
+        openModal("发送通知", `<div class="sub">确认向 <b>${escapeHtml(scope)}</b> 发送该通知？</div>`, (body, mask) => {
+          const row = document.createElement("div");
+          row.className = "btnrow";
+          row.innerHTML = '<button class="btn ghost" data-cancel>取消</button><button class="btn primary" data-confirm>确认发送</button>';
+          body.appendChild(row);
+          row.querySelector("[data-cancel]").onclick = () => closeModal(mask);
+          row.querySelector("[data-confirm]").onclick = async () => {
+            try {
+              const result = await api("/api/admin/notices", {
+                method: "POST",
+                body: JSON.stringify({
+                  message,
+                  audience,
+                  audience_value: audienceValue,
+                  render_variables: $("ntRender").checked,
+                }),
+              });
+              closeModal(mask);
+              toast("已发送给 " + (result.sent || 0) + " 位用户");
+              $("ntMessage").value = "";
+              state.audienceCount = null;
+              await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+      };
+    }
+
+    function renderAnnounceList() {
+      $("announceListHead").innerHTML = headIcon("clock", "公告列表", `<span class="spacer"></span><span class="tag plain">${state.announcements.length} 条</span>`);
+      if (!state.announcements.length) { $("announceList").innerHTML = emptyState("暂无公告", "bell"); return; }
+      const stateTag = (item) => ({
+        draft: '<span class="tag plain">草稿</span>',
+        stopped: '<span class="tag plain">已停发</span>',
+        scheduled: '<span class="tag pending">未开始</span>',
+        ended: '<span class="tag plain">已结束</span>',
+        active: '<span class="tag resolved">进行中</span>',
+      }[item.state] || '<span class="tag plain">草稿</span>');
+      $("announceList").innerHTML = `<div class="feed">${state.announcements.map((item) => `
+        <div class="feed-item">
+          <div class="feed-dot" style="background:${item.state === "active" ? TONE.green.soft : TONE.orange.soft};color:${item.state === "active" ? TONE.green.color : TONE.orange.color}">${icon("bell")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${item.pinned ? '<span class="tag resolved">置顶</span> ' : ""}${escapeHtml(item.title || "")} ${stateTag(item)}</div>
+            <div class="feed-sub">${escapeHtml((item.summary || item.body || "").slice(0, 120))}</div>
+            <div class="feed-time">${fmtTime(item.created_at)} · ${escapeHtml(audienceText(item.audience || "all", item.audience_value || ""))} · 覆盖 ${item.audience_count || 0} · 已读 ${item.read_count || 0}${item.starts_at || item.ends_at ? " · " + escapeHtml(item.starts_at || "长期") + " ~ " + escapeHtml(item.ends_at || "长期") : ""}</div>
+          </div>
+          <div class="feed-acts">
+            <button class="btn small ghost" data-announce-reach="${escapeHtml(String(item.id))}">触达</button>
+            <button class="btn small ghost" data-announce-edit="${escapeHtml(String(item.id))}">编辑</button>
+            <button class="btn small ${item.active !== 0 && item.active !== false ? "ghost" : "primary"}" data-announce-active="${escapeHtml(String(item.id))}" data-current="${item.active ? 1 : 0}">${item.active ? "停发" : "启用"}</button>
+          </div>
+        </div>`).join("")}</div>`;
+    }
+
+    function renderNoticeTemplates() {
+      $("templateHead").innerHTML = headIcon("sliders", "通知模板", `<span class="spacer"></span><span class="tag plain">${state.noticeTemplates.length} 个</span>`);
+      const list = state.noticeTemplates.length ? `<div class="feed template-feed">${state.noticeTemplates.map((t) => `
+        <div class="feed-item">
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml(t.name || "")}</div>
+            <div class="feed-sub">${escapeHtml((t.body || "").slice(0, 90))}</div>
+          </div>
+          <div class="feed-acts">
+            <button class="btn small ghost" data-template-edit="${escapeHtml(String(t.id))}">编辑</button>
+            <button class="btn small ghost" data-template-delete="${escapeHtml(String(t.id))}">删除</button>
+          </div>
+        </div>`).join("")}</div>` : emptyState("暂无模板", "sliders");
+      $("templateForm").innerHTML = `
+        <div class="form-grid">
+          <div class="field full"><label>模板名称</label><input id="tpName" maxlength="60" placeholder="如：积分到账提醒" /></div>
+          <div class="field full"><label>模板正文</label><textarea id="tpBody" rows="3" maxlength="2000" placeholder="你好 {nickname}，你的当前积分为 {credits}"></textarea></div>
+        </div>
+        <div class="btnrow"><button class="btn primary wide" id="tpCreate">保存模板</button></div>
+        ${list}`;
+      const btn = $("tpCreate");
+      if (btn) btn.onclick = async () => {
+        const name = $("tpName").value.trim();
+        if (!name) { toast("请填写模板名称"); return; }
         try {
-          const result = await api("/api/admin/notices", { method: "POST", body: JSON.stringify({ message, user_ids }) });
-          toast("已发送给 " + (result.sent || 0) + " 位用户"); $("ntMessage").value = ""; $("ntUsers").value = "";
+          await api("/api/admin/notice-templates", { method: "POST", body: JSON.stringify({ name, body: $("tpBody").value.trim() }) });
+          toast("模板已保存"); await loadAll();
         } catch (error) { toast(error.message); }
       };
+    }
+
+    function editNoticeTemplate(templateId) {
+      const found = state.noticeTemplates.find((t) => String(t.id) === String(templateId));
+      if (!found) return;
+      openModal("编辑模板", `
+        <div class="form-grid">
+          <div class="field full"><label>模板名称</label><input id="tpEditName" maxlength="60" value="${escapeHtml(found.name || "")}" /></div>
+          <div class="field full"><label>模板正文</label><textarea id="tpEditBody" rows="3" maxlength="2000">${escapeHtml(found.body || "")}</textarea></div>
+        </div>`, (body, mask) => {
+        const row = document.createElement("div");
+        row.className = "btnrow";
+        row.innerHTML = '<button class="btn ghost" data-cancel>取消</button><button class="btn primary" data-save>保存</button>';
+        body.appendChild(row);
+        row.querySelector("[data-cancel]").onclick = () => closeModal(mask);
+        row.querySelector("[data-save]").onclick = async () => {
+          const name = body.querySelector("#tpEditName").value.trim();
+          if (!name) { toast("请填写模板名称"); return; }
+          try {
+            await api(`/api/admin/notice-templates/${templateId}`, {
+              method: "PATCH",
+              body: JSON.stringify({ name, body: body.querySelector("#tpEditBody").value.trim() }),
+            });
+            closeModal(mask); toast("模板已更新"); await loadAll();
+          } catch (error) { toast(error.message); }
+        };
+      });
+    }
+
+    function renderNoticeHistory() {
+      $("noticeHistoryHead").innerHTML = headIcon("send", "发送历史", `<span class="spacer"></span><span class="tag plain">${state.noticeHistory.length} 条</span>`);
+      if (!state.noticeHistory.length) { $("noticeHistory").innerHTML = emptyState("暂无发送记录", "send"); return; }
+      $("noticeHistory").innerHTML = `<div class="feed">${state.noticeHistory.map((item) => `
+        <div class="feed-item">
+          <div class="feed-dot" style="background:${TONE.blue.soft};color:${TONE.blue.color}">${icon("send")}</div>
+          <div class="feed-body">
+            <div class="feed-title">${escapeHtml((item.message || "").slice(0, 60))}</div>
+            <div class="feed-sub">${escapeHtml(audienceText(item.audience || "all", item.audience_value || ""))} · 命中 ${item.sent || 0} · 送达 ${item.delivered || 0} · 已读 ${item.read || 0} · 未读 ${item.unread || 0}</div>
+            <div class="feed-time">${escapeHtml(item.admin_name || "管理员")} · ${fmtTime(item.created_at)}</div>
+          </div>
+        </div>`).join("")}</div>`;
+    }
+
+    async function openReachDetail(announcementId) {
+      const item = state.announcements.find((a) => Number(a.id) === Number(announcementId)) || {};
+      const load = async (stateName, box) => {
+        box.innerHTML = `<div class="sub">加载中…</div>`;
+        try {
+          const result = await api(`/api/admin/announcements/${announcementId}/reach/users?state=${stateName}&limit=100`);
+          if (!result.items.length) { box.innerHTML = `<div class="sub">暂无用户</div>`; return; }
+          box.innerHTML = `<div class="feed">${result.items.map((u) => `
+            <div class="feed-item">
+              <div class="feed-body">
+                <div class="feed-title">${escapeHtml(u.nickname || u.username || ("#" + u.id))}</div>
+                <div class="feed-sub">@${escapeHtml(u.username || "")}${stateName === "read" ? " · " + fmtTime(u.read_at) : ""}</div>
+              </div>
+            </div>`).join("")}</div>`;
+        } catch (error) { box.innerHTML = `<div class="sub">${escapeHtml(error.message)}</div>`; }
+      };
+      openModal(`触达明细 · ${item.title || ("#" + announcementId)}`, `
+        <div class="sub">覆盖 ${item.audience_count || 0} · 已读 ${item.read_count || 0} · 未读 ${Math.max((item.audience_count || 0) - (item.read_count || 0), 0)}</div>
+        <div class="btnrow reach-tabs">
+          <button class="btn small primary" data-reach="read">已读</button>
+          <button class="btn small ghost" data-reach="unread">未读</button>
+        </div>
+        <div id="reachBox"></div>`, (body) => {
+        const box = body.querySelector("#reachBox");
+        body.querySelectorAll("[data-reach]").forEach((btn) => {
+          btn.onclick = () => {
+            body.querySelectorAll("[data-reach]").forEach((b) => {
+              const on = b === btn;
+              b.classList.toggle("primary", on);
+              b.classList.toggle("ghost", !on);
+            });
+            load(btn.dataset.reach, box);
+          };
+        });
+        load("read", box);
+      });
     }
 
     /* ------------------------------------------------------------- system extras */
@@ -1563,7 +1877,8 @@
       $("refreshBtn").disabled = true;
       try {
         const [summary, users, reports, audit, metrics, health, platform, credits, codes, recovery, orders, dashboard,
-          personas, moments, announcements, admins, flags, bindings, backups, tasks, locked, alertsData] = await Promise.all([
+          personas, moments, announcements, admins, flags, bindings, backups, tasks, locked, alertsData,
+          templates, noticesHistory] = await Promise.all([
           api("/api/admin/summary"), api("/api/admin/users?size=100"), api("/api/admin/reports"),
           api("/api/admin/audit"), api("/api/metrics"), api("/health"),
           api("/api/admin/platform"), api("/api/admin/credits"),
@@ -1574,6 +1889,7 @@
           api("/api/admin/system/flags"), api("/api/admin/system/bindings"),
           api("/api/admin/system/backups"), api("/api/admin/system/tasks?limit=200"),
           api("/api/admin/security/locked"), api("/api/admin/alerts?limit=60" + alertQuery()),
+          api("/api/admin/notice-templates"), api("/api/admin/notices"),
         ]);
         state.summary = summary; state.users = users.items || []; state.reports = reports.items || [];
         state.audit = audit.items || []; state.metrics = metrics; state.health = health;
@@ -1586,6 +1902,8 @@
         state.dashboard = dashboard || null;
         state.personas = personas.items || []; state.moments = moments.items || [];
         state.announcements = announcements.items || []; state.admins = admins.items || [];
+        state.noticeTemplates = templates.items || []; state.noticeVariables = templates.variables || {};
+        state.noticeHistory = noticesHistory.items || [];
         state.flags = flags.flags || {}; state.bindings = bindings.items || [];
         state.backups = backups.items || []; state.tasks = tasks.items || [];
         state.locked = locked.items || [];
@@ -1873,6 +2191,41 @@
           });
           toast(hidden ? "已恢复该内容" : "已隐藏该内容"); await loadAll();
         } catch (error) { toast(error.message); momentHide.disabled = false; }
+        return;
+      }
+      const templateEdit = event.target.closest("[data-template-edit]");
+      if (templateEdit) { editNoticeTemplate(templateEdit.dataset.templateEdit); return; }
+      const templateDelete = event.target.closest("[data-template-delete]");
+      if (templateDelete) {
+        const id = templateDelete.dataset.templateDelete;
+        openModal("删除模板", `<div class="sub">确认删除该模板？删除后不影响已发送的通知。</div>`, (body, mask) => {
+          const row = document.createElement("div");
+          row.className = "btnrow";
+          row.innerHTML = '<button class="btn ghost" data-cancel>取消</button><button class="btn primary" data-confirm>确认删除</button>';
+          body.appendChild(row);
+          row.querySelector("[data-cancel]").onclick = () => closeModal(mask);
+          row.querySelector("[data-confirm]").onclick = async () => {
+            try {
+              await api(`/api/admin/notice-templates/${id}`, { method: "DELETE" });
+              closeModal(mask); toast("模板已删除"); await loadAll();
+            } catch (error) { toast(error.message); }
+          };
+        });
+        return;
+      }
+      const announceEdit = event.target.closest("[data-announce-edit]");
+      if (announceEdit) {
+        const item = state.announcements.find((a) => String(a.id) === announceEdit.dataset.announceEdit);
+        if (item) {
+          state.editingAnnouncement = item;
+          renderOps();
+          $("panel-ops").scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+        return;
+      }
+      const announceReach = event.target.closest("[data-announce-reach]");
+      if (announceReach) {
+        openReachDetail(announceReach.dataset.announceReach);
         return;
       }
       const announceActive = event.target.closest("[data-announce-active]");

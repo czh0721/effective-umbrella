@@ -344,6 +344,34 @@ def main():
     check("发布公告 200", announce.status_code == 200, announce.text[:120])
     notice = client.post("/api/admin/notices", json={"message": "e2e 通知", "user_ids": [user_id]})
     check("发送站内通知 200", notice.status_code == 200 and notice.json().get("sent") == 1, notice.text[:120])
+    seg_count = client.post("/api/admin/audience/count", json={"audience": "manual", "audience_value": str(user_id)})
+    check("受众命中人数 200",
+          seg_count.status_code == 200 and seg_count.json().get("count") == 1,
+          seg_count.text[:120])
+    tpl = client.post("/api/admin/notice-templates", json={"name": "e2e 模板", "body": "你好 {username}"})
+    check("创建通知模板 200", tpl.status_code == 200, tpl.text[:120])
+    tpl_id = tpl.json()["template"]["id"]
+    tpl_del = client.delete(f"/api/admin/notice-templates/{tpl_id}")
+    check("删除通知模板 200", tpl_del.status_code == 200, tpl_del.text[:120])
+    targeted = client.post(
+        "/api/admin/announcements",
+        json={"title": "e2e 定向公告", "body": "定向", "audience": "manual",
+              "audience_value": str(user_id), "pinned": True},
+    )
+    check("发布定向公告 200", targeted.status_code == 200, targeted.text[:120])
+    ann_id = targeted.json()["announcement"]["id"]
+    user_ann = client.get("/api/announcements")
+    check("用户可见定向公告",
+          any(i["id"] == ann_id for i in (user_ann.json().get("items") or [])),
+          user_ann.text[:120])
+    reach = client.get(f"/api/admin/announcements/{ann_id}/reach")
+    check("公告触达统计 200",
+          reach.status_code == 200 and reach.json().get("read", 0) >= 1,
+          reach.text[:120])
+    history = client.get("/api/admin/notices")
+    check("通知历史 200",
+          history.status_code == 200 and len(history.json().get("items") or []) >= 1,
+          history.text[:120])
     flags = client.get("/api/admin/system/flags")
     check("功能开关列表 200",
           flags.status_code == 200 and "moments_auto" in (flags.json().get("flags") or {}),

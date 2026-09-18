@@ -678,6 +678,8 @@ def _login_response(user: dict, request: Request | None = None, *, pending_totp:
     ip = _client_ip(request) if request else ""
     agent = (request.headers.get("user-agent", "") if request else "")[:300]
     token = accounts.start_session(user["id"], pending_totp=pending_totp, ip=ip, user_agent=agent)
+    if not pending_totp:
+        store.touch_user_login(user["id"])
     body = {"ok": True, "totp_required": True} if pending_totp else {"ok": True, "user": _public_user(user)}
     response = JSONResponse(body)
     response.set_cookie(
@@ -1308,6 +1310,45 @@ class AnnouncementRequest(BaseModel):
     audience: str = "all"
     starts_at: str = ""
     ends_at: str = ""
+    summary: str = ""
+    kind: str = "info"
+    priority: str = "normal"
+    pinned: bool = False
+    link_url: str = ""
+    link_text: str = ""
+    status: str = "published"
+    audience_value: str = ""
+
+
+class AnnouncementUpdateRequest(BaseModel):
+    title: str | None = None
+    body: str | None = None
+    audience: str | None = None
+    starts_at: str | None = None
+    ends_at: str | None = None
+    summary: str | None = None
+    kind: str | None = None
+    priority: str | None = None
+    pinned: bool | None = None
+    link_url: str | None = None
+    link_text: str | None = None
+    status: str | None = None
+    audience_value: str | None = None
+
+
+class AudienceCountRequest(BaseModel):
+    audience: str = "all"
+    audience_value: str = ""
+
+
+class NoticeTemplateRequest(BaseModel):
+    name: str
+    body: str = ""
+
+
+class NoticeTemplateUpdateRequest(BaseModel):
+    name: str | None = None
+    body: str | None = None
 
 
 class AnnouncementActiveChange(BaseModel):
@@ -1317,6 +1358,9 @@ class AnnouncementActiveChange(BaseModel):
 class NoticeRequest(BaseModel):
     message: str
     user_ids: list[int] | None = None
+    audience: str = "all"
+    audience_value: str = ""
+    render_variables: bool = False
 
 
 class FeatureFlagUpdate(BaseModel):
@@ -1595,6 +1639,7 @@ def login_2fa(payload: TotpCode, request: Request) -> JSONResponse:
         raise HTTPException(status_code=401, detail="验证码不正确")
     _auth_clear(ip_key, user_key)
     store.mark_session_verified(token)
+    store.touch_user_login(user["id"])
     return JSONResponse({"ok": True, "user": _public_user(user)})
 
 
@@ -3609,8 +3654,11 @@ def read_notifications(user: dict = Depends(current_user)) -> dict:
 
 @app.get("/api/announcements")
 def list_announcements(user: dict = Depends(current_user)) -> dict:
-    """当前生效的站内公告。"""
-    return {"items": store.active_announcements()}
+    """当前生效的站内公告，并写入已读回执。"""
+    items = store.active_announcements(user_id=int(user["id"]))
+    if items:
+        store.record_announcement_reads(int(user["id"]), [item["id"] for item in items])
+    return {"items": items}
 
 
 @app.post("/api/reports")
@@ -3991,7 +4039,25 @@ def admin_credit_batches(
 
 @app.get("/api/admin/announcements")
 def admin_announcements(admin: dict = Depends(current_admin)) -> dict:
-    return {"items": store.list_announcements(limit=200)}
+    return {"items": store.admin_list_announcements(limit=200)}
+
+
+@app.post("/api/admin/audience/count")
+def admin_audience_count(
+    payload: AudienceCountRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    """预览受众命中人数。"""
+    count = store.count_segment(payload.audience, payload.audience_value)
+    return {"count": count, "audience": payload.audience or "all"}
+
+
+def _announcement_validation(title: str, starts_at: str, ends_at: str) -> None:
+    if not title:
+        raise HTTPException(status_code=400, detail="请填写公告标题")
+    start = store._parse_local(starts_at)
+    end = store._parse_local(ends_at)
+    if start is not None and end is not None and end < start:
+        raise HTTPException(status_code=400, detail="结束时间不能早于开始时间")
 
 
 @app.post("/api/admin/announcements")
@@ -4000,19 +4066,87 @@ def admin_create_announcement(
 ) -> dict:
     """新建公告。"""
     title = (payload.title or "").strip()[:120]
-    if not title:
-        raise HTTPException(status_code=400, detail="请填写公告标题")
-    body = (payload.body or "").strip()[:4000]
+    starts_at = (payload.starts_at or "").strip()[:40]
+    ends_at = (payload.ends_at or "").strip()[:40]
+    _announcement_validation(title, starts_at, ends_at)
     item = store.create_announcement(
         title,
-        body,
+        (payload.body or "").strip()[:4000],
         audience=(payload.audience or "all"),
-        starts_at=(payload.starts_at or "").strip()[:40],
-        ends_at=(payload.ends_at or "").strip()[:40],
+        starts_at=starts_at,
+        ends_at=ends_at,
         admin_id=int(admin.get("id") or 0),
+        summary=(payload.summary or "").strip()[:200],
+        kind=(payload.kind or "info"),
+        priority=(payload.priority or "normal"),
+        pinned=bool(payload.pinned),
+        link_url=(payload.link_url or "").strip()[:500],
+        link_text=(payload.link_text or "").strip()[:40],
+        status=(payload.status or "published"),
+        audience_value=(payload.audience_value or "").strip()[:500],
     )
     _audit(admin, "announcement.create", target=str(item.get("id")), detail=f"title={title}")
     return {"ok": True, "announcement": item}
+
+
+@app.patch("/api/admin/announcements/{announcement_id}")
+def admin_update_announcement(
+    announcement_id: int,
+    payload: AnnouncementUpdateRequest,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    """局部更新公告。"""
+    current = store.get_announcement(announcement_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    fields = payload.model_dump(exclude_unset=True)
+    if "title" in fields:
+        fields["title"] = (fields["title"] or "").strip()[:120]
+    if "body" in fields:
+        fields["body"] = (fields["body"] or "").strip()[:4000]
+    if "summary" in fields:
+        fields["summary"] = (fields["summary"] or "").strip()[:200]
+    if "link_url" in fields:
+        fields["link_url"] = (fields["link_url"] or "").strip()[:500]
+    if "link_text" in fields:
+        fields["link_text"] = (fields["link_text"] or "").strip()[:40]
+    if "audience_value" in fields:
+        fields["audience_value"] = (fields["audience_value"] or "").strip()[:500]
+    if "starts_at" in fields:
+        fields["starts_at"] = (fields["starts_at"] or "").strip()[:40]
+    if "ends_at" in fields:
+        fields["ends_at"] = (fields["ends_at"] or "").strip()[:40]
+    title = str(fields.get("title", current.get("title") or ""))
+    starts_at = str(fields.get("starts_at", current.get("starts_at") or ""))
+    ends_at = str(fields.get("ends_at", current.get("ends_at") or ""))
+    _announcement_validation(title, starts_at, ends_at)
+    item = store.update_announcement(announcement_id, **fields)
+    _audit(admin, "announcement.update", target=str(announcement_id), detail=f"title={title}")
+    return {"ok": True, "announcement": item}
+
+
+@app.get("/api/admin/announcements/{announcement_id}/reach")
+def admin_announcement_reach(
+    announcement_id: int, admin: dict = Depends(current_admin)
+) -> dict:
+    stats = store.reach_stats(announcement_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    return stats
+
+
+@app.get("/api/admin/announcements/{announcement_id}/reach/users")
+def admin_announcement_reach_users(
+    announcement_id: int,
+    state: str = "read",
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    result = store.reach_users(announcement_id, state=state, limit=limit, offset=offset)
+    if result is None:
+        raise HTTPException(status_code=404, detail="公告不存在")
+    return result
 
 
 @app.post("/api/admin/announcements/{announcement_id}/active")
@@ -4033,20 +4167,108 @@ def admin_announcement_active(
     return {"ok": True, "active": bool(payload.active)}
 
 
+@app.get("/api/admin/notice-templates")
+def admin_notice_templates(admin: dict = Depends(current_admin)) -> dict:
+    return {
+        "items": store.list_notice_templates(),
+        "variables": store.NOTICE_VARIABLES,
+    }
+
+
+@app.post("/api/admin/notice-templates")
+def admin_create_notice_template(
+    payload: NoticeTemplateRequest, admin: dict = Depends(current_admin)
+) -> dict:
+    name = (payload.name or "").strip()[:60]
+    if not name:
+        raise HTTPException(status_code=400, detail="请填写模板名称")
+    item = store.create_notice_template(name, (payload.body or "")[:2000])
+    _audit(admin, "notice_template.create", target=str(item.get("id")), detail=name)
+    return {"ok": True, "template": item}
+
+
+@app.patch("/api/admin/notice-templates/{template_id}")
+def admin_update_notice_template(
+    template_id: int,
+    payload: NoticeTemplateUpdateRequest,
+    admin: dict = Depends(current_admin),
+) -> dict:
+    fields = payload.model_dump(exclude_unset=True)
+    if "name" in fields:
+        fields["name"] = (fields["name"] or "").strip()[:60]
+        if not fields["name"]:
+            raise HTTPException(status_code=400, detail="请填写模板名称")
+    if "body" in fields:
+        fields["body"] = (fields["body"] or "")[:2000]
+    item = store.update_notice_template(template_id, name=fields.get("name"), body=fields.get("body"))
+    if item is None:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    _audit(admin, "notice_template.update", target=str(template_id), detail=str(item.get("name") or ""))
+    return {"ok": True, "template": item}
+
+
+@app.delete("/api/admin/notice-templates/{template_id}")
+def admin_delete_notice_template(template_id: int, admin: dict = Depends(current_admin)) -> dict:
+    if not store.delete_notice_template(template_id):
+        raise HTTPException(status_code=404, detail="模板不存在")
+    _audit(admin, "notice_template.delete", target=str(template_id))
+    return {"ok": True}
+
+
+@app.get("/api/admin/notices")
+def admin_list_notices(admin: dict = Depends(current_admin)) -> dict:
+    """通知发送历史与送达统计。"""
+    return {"items": store.list_admin_notices(limit=100)}
+
+
+@app.get("/api/admin/notices/{notice_id}")
+def admin_notice_detail(notice_id: int, admin: dict = Depends(current_admin)) -> dict:
+    stats = store.notice_stats(notice_id)
+    if stats is None:
+        raise HTTPException(status_code=404, detail="通知不存在")
+    return stats
+
+
 @app.post("/api/admin/notices")
 def admin_send_notice(payload: NoticeRequest, admin: dict = Depends(current_admin)) -> dict:
-    """发送站内通知；未指定用户则发给全体活跃用户。"""
+    """发送站内通知；未指定用户则按受众分段发送。"""
     message = (payload.message or "").strip()[:500]
     if not message:
         raise HTTPException(status_code=400, detail="请填写通知内容")
-    count = store.broadcast_notice(payload.user_ids, message)
+    if payload.user_ids:
+        targets = payload.user_ids
+        audience = "manual"
+        audience_value = ",".join(str(uid) for uid in payload.user_ids)
+    else:
+        audience = payload.audience if payload.audience in store.SEGMENT_KINDS else "all"
+        audience_value = payload.audience_value or ""
+        targets = store.segment_user_ids(audience, audience_value)
+    if not targets:
+        raise HTTPException(status_code=400, detail="目标受众为空")
+    record = store.create_admin_notice(
+        int(admin.get("id") or 0),
+        str(admin.get("name") or admin.get("username") or ""),
+        message,
+        audience=audience,
+        audience_value=audience_value,
+        sent=len(targets),
+    )
+    count = store.broadcast_notice(
+        targets,
+        message,
+        notice_id=int(record.get("id") or 0),
+        render=bool(payload.render_variables),
+        audience=audience,
+        audience_value=audience_value,
+    )
+    store.set_admin_notice_sent(int(record.get("id") or 0), count)
     _audit(
         admin,
         "notice.broadcast",
-        target="all" if not payload.user_ids else f"{len(payload.user_ids)}users",
-        detail=message[:120],
+        target=f"notice:{record.get('id')}",
+        detail=f"audience={audience} sent={count}",
     )
-    return {"ok": True, "sent": count}
+    return {"ok": True, "sent": count, "notice_id": record.get("id")}
 
 
 @app.get("/api/admin/system/bindings")

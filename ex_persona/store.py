@@ -423,6 +423,32 @@ CREATE TABLE IF NOT EXISTS feature_flags (
     updated_at TEXT NOT NULL,
     updated_by TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS announcement_reads (
+    announcement_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    read_at TEXT NOT NULL,
+    PRIMARY KEY (announcement_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_announcement_reads_user
+    ON announcement_reads(user_id, announcement_id);
+CREATE TABLE IF NOT EXISTS notice_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_id INTEGER NOT NULL,
+    admin_name TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    audience TEXT NOT NULL DEFAULT 'all',
+    audience_value TEXT NOT NULL DEFAULT '',
+    sent INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_admin_notices_created ON admin_notices(created_at);
 """
 
 _PERSONA_COLUMNS = {
@@ -465,6 +491,7 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "failed_first_at": "TEXT NOT NULL DEFAULT ''",
         "locked_until": "TEXT NOT NULL DEFAULT ''",
         "last_password_change_at": "TEXT NOT NULL DEFAULT ''",
+        "last_login_at": "TEXT NOT NULL DEFAULT ''",
     },
     "admins": {
         "failed_attempts": "INTEGER NOT NULL DEFAULT 0",
@@ -473,6 +500,18 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     },
     "moments": {"hidden": "INTEGER NOT NULL DEFAULT 0"},
     "admin_alerts": {"target": "TEXT NOT NULL DEFAULT ''"},
+    "announcements": {
+        "summary": "TEXT NOT NULL DEFAULT ''",
+        "kind": "TEXT NOT NULL DEFAULT 'info'",
+        "priority": "TEXT NOT NULL DEFAULT 'normal'",
+        "pinned": "INTEGER NOT NULL DEFAULT 0",
+        "link_url": "TEXT NOT NULL DEFAULT ''",
+        "link_text": "TEXT NOT NULL DEFAULT ''",
+        "status": "TEXT NOT NULL DEFAULT 'published'",
+        "audience_value": "TEXT NOT NULL DEFAULT ''",
+        "audience_count": "INTEGER NOT NULL DEFAULT 0",
+    },
+    "alerts": {"notice_id": "INTEGER NOT NULL DEFAULT 0"},
     "credit_packages": {
         "coins": "INTEGER NOT NULL DEFAULT 0",
         "validity_days": "INTEGER NOT NULL DEFAULT 30",
@@ -1239,6 +1278,27 @@ FEATURE_FLAG_DEFAULTS = {
 }
 FEATURE_FLAG_KEYS = tuple(FEATURE_FLAG_DEFAULTS)
 ANNOUNCEMENT_AUDIENCES = {"all"}
+SEGMENT_KINDS = ("all", "active", "paid", "new", "tag", "manual")
+SEGMENT_LABELS = {
+    "all": "全体",
+    "active": "活跃用户（近30天）",
+    "paid": "付费用户",
+    "new": "新用户（近7天）",
+    "tag": "标签",
+    "manual": "指定用户",
+}
+ACTIVE_WINDOW_DAYS = 30
+NEW_WINDOW_DAYS = 7
+ANNOUNCEMENT_KINDS = ("info", "update", "activity")
+ANNOUNCEMENT_PRIORITIES = ("normal", "high")
+ANNOUNCEMENT_STATUSES = ("draft", "published")
+NOTICE_VARIABLES = {
+    "{username}": "用户名",
+    "{nickname}": "昵称",
+    "{coins}": "念念币",
+    "{credits}": "积分",
+    "{tickets}": "蒸馏券",
+}
 
 
 def search_personas(
@@ -1432,6 +1492,102 @@ def admin_list_credit_batches(
     return [dict(row) for row in rows]
 
 
+def _parse_local(value: object) -> datetime | None:
+    """解析本地时间字符串；无时区信息时按本地时区处理。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=clock.local_tz())
+    return parsed.astimezone(clock.local_tz())
+
+
+def _utc_cutoff(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=int(days))).isoformat()
+
+
+def touch_user_login(user_id: int) -> None:
+    """登录成功后刷新最近登录时间。"""
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            (utcnow(), int(user_id)),
+        )
+
+
+def segment_user_ids(audience: str = "all", value: str = "") -> list[int]:
+    """按受众分段解析账号集合；所有分段排除已停用账号。"""
+    _ensure()
+    kind = audience if audience in SEGMENT_KINDS else "all"
+    text = str(value or "").strip()
+    where = ["COALESCE(status, 'active') != 'disabled'"]
+    params: list = []
+    if kind == "active":
+        where.append("last_login_at != '' AND last_login_at >= ?")
+        params.append(_utc_cutoff(ACTIVE_WINDOW_DAYS))
+    elif kind == "new":
+        where.append("created_at >= ?")
+        params.append(_utc_cutoff(NEW_WINDOW_DAYS))
+    elif kind == "paid":
+        where.append("id IN (SELECT DISTINCT user_id FROM orders)")
+    elif kind == "tag":
+        if not text:
+            return []
+        where.append("tags LIKE ?")
+        params.append(f"%{text}%")
+    elif kind == "manual":
+        ids = [int(chunk) for chunk in text.replace("，", ",").split(",") if chunk.strip().isdigit()]
+        if not ids:
+            return []
+        where.append("id IN (" + ",".join("?" for _ in ids) + ")")
+        params.extend(ids)
+    sql = "SELECT id FROM users WHERE " + " AND ".join(where) + " ORDER BY id ASC"
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [int(row["id"]) for row in rows]
+
+
+def count_segment(audience: str = "all", value: str = "") -> int:
+    return len(segment_user_ids(audience, value))
+
+
+def render_notice_message(body: str, user: dict | None) -> str:
+    """按收件人渲染通知变量，未识别的占位符原样保留。"""
+    text = str(body or "")
+    account = user or {}
+    replacements = {
+        "{username}": str(account.get("username") or ""),
+        "{nickname}": str(account.get("nickname") or ""),
+        "{coins}": str(int(account.get("coins") or 0)),
+        "{credits}": str(int(account.get("credits") or 0)),
+        "{tickets}": str(int(account.get("distill_tickets") or 0)),
+    }
+    for token, rendered in replacements.items():
+        text = text.replace(token, rendered)
+    return text
+
+
+def announcement_state(item: dict, now: datetime | None = None) -> str:
+    """派生公告状态：draft / stopped / scheduled / ended / active。"""
+    if (item.get("status") or "published") == "draft":
+        return "draft"
+    if not item.get("active"):
+        return "stopped"
+    moment = now or clock.now_local()
+    start = _parse_local(item.get("starts_at"))
+    end = _parse_local(item.get("ends_at"))
+    if start is not None and moment < start:
+        return "scheduled"
+    if end is not None and moment > end:
+        return "ended"
+    return "active"
+
+
 def create_announcement(
     title: str,
     body: str,
@@ -1439,19 +1595,98 @@ def create_announcement(
     starts_at: str = "",
     ends_at: str = "",
     admin_id: int = 0,
+    *,
+    summary: str = "",
+    kind: str = "info",
+    priority: str = "normal",
+    pinned: bool = False,
+    link_url: str = "",
+    link_text: str = "",
+    status: str = "published",
+    audience_value: str = "",
 ) -> dict:
     """新建公告；``active`` 默认开启，时间窗留空表示长期有效。"""
     _ensure()
-    audience = audience if audience in ANNOUNCEMENT_AUDIENCES else "all"
+    audience = audience if audience in SEGMENT_KINDS else "all"
+    kind = kind if kind in ANNOUNCEMENT_KINDS else "info"
+    priority = priority if priority in ANNOUNCEMENT_PRIORITIES else "normal"
+    status = status if status in ANNOUNCEMENT_STATUSES else "published"
     now = utcnow()
+    total = 0 if status == "draft" else count_segment(audience, audience_value)
     with _lock, connect() as conn:
         cursor = conn.execute(
-            "INSERT INTO announcements (title, body, audience, starts_at, ends_at, active,"
-            " admin_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
-            (title, body, audience, starts_at, ends_at, int(admin_id), now, now),
+            "INSERT INTO announcements (title, body, summary, kind, priority, pinned,"
+            " link_url, link_text, status, audience, audience_value, audience_count,"
+            " starts_at, ends_at, active, admin_id, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+            (
+                title,
+                body,
+                summary,
+                kind,
+                priority,
+                1 if pinned else 0,
+                link_url,
+                link_text,
+                status,
+                audience,
+                audience_value,
+                total,
+                starts_at,
+                ends_at,
+                int(admin_id),
+                now,
+                now,
+            ),
         )
         new_id = int(cursor.lastrowid or 0)
     return get_announcement(new_id) or {}
+
+
+def update_announcement(announcement_id: int, **fields: object) -> dict | None:
+    """局部更新公告并刷新覆盖人数；未知字段忽略。"""
+    _ensure()
+    current = get_announcement(announcement_id)
+    if current is None:
+        return None
+    updates: dict[str, object] = {}
+    for key in (
+        "title",
+        "body",
+        "summary",
+        "kind",
+        "priority",
+        "pinned",
+        "link_url",
+        "link_text",
+        "status",
+        "audience",
+        "audience_value",
+        "starts_at",
+        "ends_at",
+    ):
+        if key in fields and fields[key] is not None:
+            updates[key] = fields[key]
+    if "kind" in updates and updates["kind"] not in ANNOUNCEMENT_KINDS:
+        updates.pop("kind")
+    if "priority" in updates and updates["priority"] not in ANNOUNCEMENT_PRIORITIES:
+        updates.pop("priority")
+    if "status" in updates and updates["status"] not in ANNOUNCEMENT_STATUSES:
+        updates.pop("status")
+    if "audience" in updates and updates["audience"] not in SEGMENT_KINDS:
+        updates.pop("audience")
+    if "pinned" in updates:
+        updates["pinned"] = 1 if updates["pinned"] else 0
+    audience = str(updates.get("audience", current.get("audience") or "all"))
+    audience_value = str(updates.get("audience_value", current.get("audience_value") or ""))
+    status = str(updates.get("status", current.get("status") or "published"))
+    updates["audience_count"] = 0 if status == "draft" else count_segment(audience, audience_value)
+    updates["updated_at"] = utcnow()
+    columns = ", ".join(f"{key} = ?" for key in updates)
+    params = list(updates.values()) + [int(announcement_id)]
+    with _lock, connect() as conn:
+        conn.execute(f"UPDATE announcements SET {columns} WHERE id = ?", params)
+    return get_announcement(announcement_id)
 
 
 def get_announcement(announcement_id: int) -> dict | None:
@@ -1473,20 +1708,153 @@ def list_announcements(limit: int = 100) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def active_announcements(now: str = "") -> list[dict]:
-    """当前生效的公告：active=1 且落在时间窗内（空值视为不限制）。"""
+def count_announcement_reads(announcement_id: int) -> int:
     _ensure()
-    stamp = now or utcnow()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS total FROM announcement_reads WHERE announcement_id = ?",
+            (int(announcement_id),),
+        ).fetchone()
+    return int(row["total"]) if row is not None else 0
+
+
+def admin_list_announcements(limit: int = 100) -> list[dict]:
+    """后台公告列表：附派生状态、覆盖人数与已读人数。"""
+    items = list_announcements(limit)
+    moment = clock.now_local()
+    result = []
+    for item in items:
+        data = dict(item)
+        state = announcement_state(item, moment)
+        data["state"] = state
+        if state == "draft":
+            data["audience_count"] = 0
+            data["read_count"] = 0
+        else:
+            data["audience_count"] = int(item.get("audience_count") or 0) or count_segment(
+                str(item.get("audience") or "all"),
+                str(item.get("audience_value") or ""),
+            )
+            data["read_count"] = count_announcement_reads(item["id"])
+        result.append(data)
+    return result
+
+
+def reach_stats(announcement_id: int) -> dict | None:
+    item = get_announcement(announcement_id)
+    if item is None:
+        return None
+    state = announcement_state(item)
+    if state == "draft":
+        return {"state": "draft", "audience_count": 0, "read": 0, "unread": 0}
+    total = int(item.get("audience_count") or 0) or count_segment(
+        str(item.get("audience") or "all"),
+        str(item.get("audience_value") or ""),
+    )
+    read = count_announcement_reads(announcement_id)
+    return {"state": state, "audience_count": total, "read": read, "unread": max(total - read, 0)}
+
+
+def reach_users(announcement_id: int, state: str = "read", limit: int = 50, offset: int = 0) -> dict | None:
+    """公告触达名单：``state`` 取 read 或 unread，分页返回。"""
+    item = get_announcement(announcement_id)
+    if item is None:
+        return None
+    if announcement_state(item) == "draft":
+        return {"items": [], "total": 0}
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    audience_ids = segment_user_ids(
+        str(item.get("audience") or "all"),
+        str(item.get("audience_value") or ""),
+    )
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, title, body, audience, starts_at, ends_at, created_at"
-            " FROM announcements WHERE active = 1"
-            " AND (starts_at = '' OR starts_at <= ?)"
-            " AND (ends_at = '' OR ends_at >= ?)"
-            " ORDER BY id DESC LIMIT 50",
-            (stamp, stamp),
+            "SELECT user_id, read_at FROM announcement_reads WHERE announcement_id = ?",
+            (int(announcement_id),),
         ).fetchall()
-    return [dict(row) for row in rows]
+    read_at = {int(row["user_id"]): row["read_at"] for row in rows}
+    if state == "unread":
+        selected = [uid for uid in audience_ids if uid not in read_at]
+    else:
+        selected = [uid for uid in audience_ids if uid in read_at]
+    total = len(selected)
+    page = selected[offset : offset + limit]
+    info: dict[int, dict] = {}
+    if page:
+        placeholders = ",".join("?" for _ in page)
+        with connect() as conn:
+            found = conn.execute(
+                f"SELECT id, username, nickname, status FROM users WHERE id IN ({placeholders})",
+                page,
+            ).fetchall()
+        info = {int(row["id"]): dict(row) for row in found}
+    items = []
+    for uid in page:
+        data = info.get(uid, {"id": uid, "username": "", "nickname": "", "status": ""})
+        data["read_at"] = read_at.get(uid, "")
+        items.append(data)
+    return {"items": items, "total": total}
+
+
+def record_announcement_reads(user_id: int, announcement_ids: list[int]) -> int:
+    """写入公告已读回执；重复写入保留首次已读时间。"""
+    _ensure()
+    ids: list[int] = []
+    for raw in announcement_ids or []:
+        try:
+            ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return 0
+    now = utcnow()
+    with _lock, connect() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO announcement_reads (announcement_id, user_id, read_at)"
+            " VALUES (?, ?, ?)",
+            [(aid, int(user_id), now) for aid in ids],
+        )
+    return len(ids)
+
+
+def active_announcements(now: object = "", user_id: int | None = None) -> list[dict]:
+    """当前生效的公告：发布状态、active=1、落在时间窗内且受众包含用户。"""
+    _ensure()
+    moment: datetime
+    if isinstance(now, datetime):
+        moment = now
+    else:
+        moment = _parse_local(now) or clock.now_local()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, title, body, summary, kind, priority, pinned, link_url, link_text,"
+            " audience, audience_value, starts_at, ends_at, created_at"
+            " FROM announcements WHERE active = 1"
+            " AND COALESCE(status, 'published') != 'draft'"
+            " ORDER BY pinned DESC, id DESC LIMIT 50"
+        ).fetchall()
+    segment_cache: dict[tuple[str, str], set[int]] = {}
+    result = []
+    for row in rows:
+        item = dict(row)
+        start = _parse_local(item.get("starts_at"))
+        end = _parse_local(item.get("ends_at"))
+        if start is not None and moment < start:
+            continue
+        if end is not None and moment > end:
+            continue
+        audience = str(item.get("audience") or "all")
+        if user_id is not None and audience != "all":
+            value = str(item.get("audience_value") or "")
+            key = (audience, value)
+            if key not in segment_cache:
+                segment_cache[key] = set(segment_user_ids(audience, value))
+            if int(user_id) not in segment_cache[key]:
+                continue
+        item.pop("audience_value", None)
+        result.append(item)
+    return result
 
 
 def set_announcement_active(announcement_id: int, active: bool) -> bool:
@@ -1499,29 +1867,179 @@ def set_announcement_active(announcement_id: int, active: bool) -> bool:
         return bool(cursor.rowcount)
 
 
-def broadcast_notice(user_ids: list[int] | None, message: str, kind: str = "notice") -> int:
-    """发送站内通知；``user_ids`` 为空表示全体活跃用户。"""
+def broadcast_notice(
+    user_ids: list[int] | None = None,
+    message: str = "",
+    kind: str = "notice",
+    notice_id: int = 0,
+    render: bool = False,
+    audience: str = "all",
+    audience_value: str = "",
+) -> int:
+    """发送站内通知；``user_ids`` 为空时按受众分段解析收件人。"""
     _ensure()
     text = (message or "").strip()
     if not text:
         return 0
+    if user_ids:
+        targets = [int(uid) for uid in user_ids]
+        targets = [uid for uid in targets if get_user(uid) is not None]
+    else:
+        targets = segment_user_ids(audience, audience_value)
+    if not targets:
+        return 0
+    now = utcnow()
+    rows = []
+    for uid in targets:
+        body = render_notice_message(text, get_user(uid)) if render else text
+        rows.append((int(uid), kind or "notice", body, now, int(notice_id or 0)))
+    with _lock, connect() as conn:
+        conn.executemany(
+            "INSERT INTO alerts (user_id, kind, message, read_at, created_at, notice_id)"
+            " VALUES (?, ?, ?, '', ?, ?)",
+            rows,
+        )
+    return len(targets)
+
+
+def list_notice_templates() -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM notice_templates ORDER BY id DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_notice_template(name: str, body: str = "") -> dict:
+    _ensure()
     now = utcnow()
     with _lock, connect() as conn:
-        if user_ids:
-            targets = [int(uid) for uid in user_ids]
-        else:
-            rows = conn.execute(
-                "SELECT id FROM users WHERE COALESCE(status, 'active') = 'active'"
-            ).fetchall()
-            targets = [int(row["id"]) for row in rows]
-        if not targets:
-            return 0
-        conn.executemany(
-            "INSERT INTO alerts (user_id, kind, message, read_at, created_at)"
-            " VALUES (?, ?, ?, '', ?)",
-            [(uid, kind or "notice", text, now) for uid in targets],
+        cursor = conn.execute(
+            "INSERT INTO notice_templates (name, body, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?)",
+            (str(name or "").strip(), str(body or ""), now, now),
         )
-        return len(targets)
+        new_id = int(cursor.lastrowid or 0)
+        row = conn.execute(
+            "SELECT * FROM notice_templates WHERE id = ?", (new_id,)
+        ).fetchone()
+    return dict(row) if row is not None else {}
+
+
+def update_notice_template(template_id: int, name: str | None = None, body: str | None = None) -> dict | None:
+    _ensure()
+    updates: dict[str, object] = {}
+    if name is not None:
+        updates["name"] = str(name).strip()
+    if body is not None:
+        updates["body"] = str(body)
+    if not updates:
+        existing = get_notice_template(template_id)
+        return existing
+    updates["updated_at"] = utcnow()
+    columns = ", ".join(f"{key} = ?" for key in updates)
+    params = list(updates.values()) + [int(template_id)]
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            f"UPDATE notice_templates SET {columns} WHERE id = ?", params
+        )
+        if not cursor.rowcount:
+            return None
+        row = conn.execute(
+            "SELECT * FROM notice_templates WHERE id = ?", (int(template_id),)
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_notice_template(template_id: int) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM notice_templates WHERE id = ?", (int(template_id),)
+        ).fetchone()
+    return _row(row)
+
+
+def delete_notice_template(template_id: int) -> bool:
+    _ensure()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM notice_templates WHERE id = ?", (int(template_id),)
+        )
+        return bool(cursor.rowcount)
+
+
+def create_admin_notice(
+    admin_id: int,
+    admin_name: str,
+    message: str,
+    audience: str = "all",
+    audience_value: str = "",
+    sent: int = 0,
+) -> dict:
+    _ensure()
+    now = utcnow()
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "INSERT INTO admin_notices (admin_id, admin_name, message, audience,"
+            " audience_value, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(admin_id),
+                str(admin_name or ""),
+                str(message or ""),
+                audience if audience in SEGMENT_KINDS else "all",
+                str(audience_value or ""),
+                int(sent),
+                now,
+            ),
+        )
+        new_id = int(cursor.lastrowid or 0)
+        row = conn.execute("SELECT * FROM admin_notices WHERE id = ?", (new_id,)).fetchone()
+    return dict(row) if row is not None else {}
+
+
+def set_admin_notice_sent(notice_id: int, sent: int) -> None:
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "UPDATE admin_notices SET sent = ? WHERE id = ?",
+            (int(sent), int(notice_id)),
+        )
+
+
+def notice_stats(notice_id: int) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS delivered,"
+            " SUM(CASE WHEN read_at != '' THEN 1 ELSE 0 END) AS read_count"
+            " FROM alerts WHERE notice_id = ?",
+            (int(notice_id),),
+        ).fetchone()
+    if row is None:
+        return None
+    delivered = int(row["delivered"] or 0)
+    read_count = int(row["read_count"] or 0)
+    return {"delivered": delivered, "read": read_count, "unread": max(delivered - read_count, 0)}
+
+
+def list_admin_notices(limit: int = 50) -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM admin_notices ORDER BY id DESC LIMIT ?",
+            (max(1, min(int(limit or 50), 200)),),
+        ).fetchall()
+    items = []
+    for row in rows:
+        data = dict(row)
+        stats = notice_stats(int(row["id"])) or {}
+        data["delivered"] = stats.get("delivered", 0)
+        data["read"] = stats.get("read", 0)
+        data["unread"] = stats.get("unread", int(row["sent"] or 0))
+        items.append(data)
+    return items
 
 
 def admin_list_bindings(limit: int = 100) -> list[dict]:
