@@ -285,6 +285,29 @@ def main():
               after_buy.get("distill_tickets", {}).get("balance", 0) == tickets_before + 1,
               f"{tickets_before}->{after_buy.get('distill_tickets', {}).get('balance')}")
 
+    tier_names = {
+        "轻享月卡", "标准月卡", "尊享月卡",
+        "轻享季卡", "标准季卡", "尊享季卡",
+        "轻享年卡", "标准年卡", "尊享年卡",
+    }
+    board = client.get("/api/credits").json()["packages"]
+    board_names = {p.get("name") for p in board}
+    check("套餐板含 9 档新档位", tier_names <= board_names, str(sorted(board_names)))
+    check("旧跨时长套餐已下架", "标准包" not in board_names and "尊享包" not in board_names,
+          str(sorted(board_names)))
+    tier_margins = []
+    tier_margin_ok = True
+    for item in board:
+        if item.get("name") not in tier_names:
+            continue
+        revenue = float(item["coins"]) / 10
+        cost = (float(item["credits"]) / 20) * 0.008
+        margin = 1 - cost / revenue
+        tier_margins.append(f"{item['name']}={margin:.3f}")
+        if abs(margin - 0.6) > 0.02:
+            tier_margin_ok = False
+    check("新档位毛利约 60%", tier_margin_ok and len(tier_margins) == 9, ", ".join(tier_margins))
+
     prof = client.post("/api/profile", json={"nickname": "e2e小念", "avatar": "data:image/png;base64,iVBORw0KGgo="})
     check("更新资料 200", prof.status_code == 200, prof.text[:140])
     me_prof = client.get("/api/me").json()["user"]
