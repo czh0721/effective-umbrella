@@ -287,6 +287,13 @@
 .form-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 
 .pkg-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.pkg-tier { grid-column: 1 / -1; }
+.pkg-tier + .pkg-tier { margin-top: 6px; }
+.pkg-tier-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  margin: 0 2px 12px; font-size: 13px; font-weight: 750; letter-spacing: 0.08em; color: var(--v);
+}
+.pkg-tier-head span { font-size: 11.5px; font-weight: 500; letter-spacing: 0; color: var(--text-3); }
 .pkg {
   position: relative; padding: 16px 18px; border-radius: 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.7));

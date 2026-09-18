@@ -246,6 +246,8 @@ CREATE TABLE IF NOT EXISTS credit_packages (
     sort INTEGER NOT NULL DEFAULT 0,
     active INTEGER NOT NULL DEFAULT 1,
     validity_days INTEGER NOT NULL DEFAULT 30,
+    bonus_credits INTEGER NOT NULL DEFAULT 0,
+    bonus_tickets INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -388,6 +390,8 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     "credit_packages": {
         "coins": "INTEGER NOT NULL DEFAULT 0",
         "validity_days": "INTEGER NOT NULL DEFAULT 30",
+        "bonus_credits": "INTEGER NOT NULL DEFAULT 0",
+        "bonus_tickets": "INTEGER NOT NULL DEFAULT 0",
     },
     "platform_config": {
         "default_credit_days": "INTEGER NOT NULL DEFAULT 30",
@@ -401,6 +405,15 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
 CREDIT_VALIDITY_DAYS = (30, 90, 365)
 CREDIT_VALIDITY_LABELS = {30: "月度", 90: "季度", 365: "年度"}
 DEFAULT_CREDIT_DAYS = 30
+
+
+def credit_validity_label(days: object) -> str:
+    """把有效期天数转成用户可读的档位名（月度 / 季度 / 年度）。"""
+    try:
+        value = int(days)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        value = DEFAULT_CREDIT_DAYS
+    return CREDIT_VALIDITY_LABELS.get(value, f"{value} 天")
 
 DEFAULT_PACKAGES = (
     ("体验包", 100, 10, "", 1, 30),
@@ -702,6 +715,23 @@ def set_user_role(user_id: int, role: str) -> None:
     _ensure()
     with _lock, connect() as conn:
         conn.execute("UPDATE users SET role = ? WHERE id = ?", (role or "user", user_id))
+
+
+def set_user_profile(user_id: int, *, nickname: str | None = None, avatar: str | None = None) -> None:
+    fields = []
+    params: list = []
+    if nickname is not None:
+        fields.append("nickname = ?")
+        params.append(nickname)
+    if avatar is not None:
+        fields.append("avatar = ?")
+        params.append(avatar)
+    if not fields:
+        return
+    _ensure()
+    params.append(user_id)
+    with _lock, connect() as conn:
+        conn.execute(f"UPDATE users SET {', '.join(fields)} WHERE id = ?", params)
 
 
 def set_user_status(user_id: int, status: str) -> None:
@@ -2613,15 +2643,23 @@ def list_credit_packages(active_only: bool = True) -> list[dict]:
     query += " ORDER BY sort, id"
     with connect() as conn:
         rows = conn.execute(query).fetchall()
-    return [dict(row) for row in rows]
+    packages = []
+    for row in rows:
+        item = dict(row)
+        item["validity_label"] = credit_validity_label(item.get("validity_days"))
+        packages.append(item)
+    return packages
 
 
 def get_credit_package(package_id: int) -> dict | None:
     _ensure()
     with connect() as conn:
-        return _row(conn.execute(
+        item = _row(conn.execute(
             "SELECT * FROM credit_packages WHERE id = ?", (package_id,)
         ).fetchone())
+    if item is not None:
+        item["validity_label"] = credit_validity_label(item.get("validity_days"))
+    return item
 
 
 def upsert_credit_package(
@@ -2634,27 +2672,32 @@ def upsert_credit_package(
     active: bool,
     coins: int = 0,
     validity_days: int | None = None,
+    bonus_credits: int = 0,
+    bonus_tickets: int = 0,
 ) -> dict:
     _ensure()
     now = utcnow()
     credits = max(int(credits), 0)
+    bonus_credits = max(int(bonus_credits), 0)
+    bonus_tickets = max(int(bonus_tickets), 0)
     days = normalize_validity_days(validity_days) if validity_days is not None else None
     with _lock, connect() as conn:
         if package_id:
             if days is None:
                 conn.execute(
                     "UPDATE credit_packages SET name = ?, credits = ?, coins = ?, price_cents = ?,"
-                    " badge = ?, sort = ?, active = ?, updated_at = ? WHERE id = ?",
+                    " badge = ?, sort = ?, active = ?, bonus_credits = ?, bonus_tickets = ?,"
+                    " updated_at = ? WHERE id = ?",
                     (name, credits, max(int(coins), 0), int(price_cents), badge, int(sort),
-                     1 if active else 0, now, int(package_id)),
+                     1 if active else 0, bonus_credits, bonus_tickets, now, int(package_id)),
                 )
             else:
                 conn.execute(
                     "UPDATE credit_packages SET name = ?, credits = ?, coins = ?, price_cents = ?,"
-                    " badge = ?, sort = ?, active = ?, validity_days = ?, updated_at = ?"
-                    " WHERE id = ?",
+                    " badge = ?, sort = ?, active = ?, validity_days = ?, bonus_credits = ?,"
+                    " bonus_tickets = ?, updated_at = ? WHERE id = ?",
                     (name, credits, max(int(coins), 0), int(price_cents), badge, int(sort),
-                     1 if active else 0, days, now, int(package_id)),
+                     1 if active else 0, days, bonus_credits, bonus_tickets, now, int(package_id)),
                 )
             if conn.execute(
                 "SELECT id FROM credit_packages WHERE id = ?", (int(package_id),)
@@ -2664,10 +2707,11 @@ def upsert_credit_package(
         else:
             cursor = conn.execute(
                 "INSERT INTO credit_packages (name, credits, coins, price_cents, badge, sort,"
-                " active, validity_days, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " active, validity_days, bonus_credits, bonus_tickets, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (name, credits, max(int(coins), 0), int(price_cents), badge, int(sort),
-                 1 if active else 0, days if days is not None else DEFAULT_CREDIT_DAYS, now, now),
+                 1 if active else 0, days if days is not None else DEFAULT_CREDIT_DAYS,
+                 bonus_credits, bonus_tickets, now, now),
             )
             row_id = int(cursor.lastrowid)
     return get_credit_package(row_id) or {}
@@ -3074,10 +3118,15 @@ def purchase_package(user_id: int, package_id: int, idem: str = "") -> dict:
                 "credits": int(user["credits"]),
                 "package": dict(package),
                 "spent": 0,
+                "bonus_credits": 0,
+                "bonus_tickets": 0,
                 "duplicate": True,
             }
         price = max(int(package["coins"]), 0)
-        gain = max(int(package["credits"]), 0)
+        base_gain = max(int(package["credits"]), 0)
+        bonus_credits = max(int(package["bonus_credits"]), 0)
+        bonus_tickets = max(int(package["bonus_tickets"]), 0)
+        gain = base_gain + bonus_credits
         days = normalize_validity_days(package["validity_days"])
         cursor = conn.execute(
             "UPDATE users SET coins = coins - ?, credits = credits + ?"
@@ -3091,13 +3140,30 @@ def purchase_package(user_id: int, package_id: int, idem: str = "") -> dict:
         ).fetchone()
         new_coins = int(fresh["coins"])
         new_credits = int(fresh["credits"])
+        credit_reason = f"套餐到账：{package['name']}"
+        if bonus_credits:
+            credit_reason += f"（含赠送 {bonus_credits}）"
         if gain:
             conn.execute(
                 "INSERT INTO credit_batches (user_id, amount, remaining, source, package_id,"
                 " reason, actor, ref, expires_at, created_at) VALUES (?, ?, ?, 'package', ?,"
                 " ?, '', ?, ?, ?)",
-                (user_id, gain, gain, int(package_id), f"套餐到账：{package['name']}",
+                (user_id, gain, gain, int(package_id), credit_reason,
                  f"package:{package_id}", _expires_at(days, now), now),
+            )
+        if bonus_tickets:
+            conn.execute(
+                "UPDATE users SET distill_tickets = distill_tickets + ? WHERE id = ?",
+                (bonus_tickets, user_id),
+            )
+            new_tickets = int(conn.execute(
+                "SELECT distill_tickets FROM users WHERE id = ?", (user_id,)
+            ).fetchone()["distill_tickets"])
+            conn.execute(
+                "INSERT INTO distill_ticket_ledger (user_id, delta, balance_after, reason,"
+                " actor, ref, created_at) VALUES (?, ?, ?, ?, 'system', ?, ?)",
+                (user_id, bonus_tickets, new_tickets, f"套餐赠送：{package['name']}",
+                 f"package:{package_id}", now),
             )
         if price:
             conn.execute(
@@ -3108,13 +3174,15 @@ def purchase_package(user_id: int, package_id: int, idem: str = "") -> dict:
         conn.execute(
             "INSERT INTO credit_ledger (user_id, delta, balance_after, reason, actor,"
             " ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (user_id, gain, new_credits, f"套餐到账：{package['name']}", "", f"package:{package_id}", now),
+            (user_id, gain, new_credits, credit_reason, "", f"package:{package_id}", now),
         )
     return {
         "coins": new_coins,
         "credits": new_credits,
         "package": dict(package),
         "spent": price,
+        "bonus_credits": bonus_credits,
+        "bonus_tickets": bonus_tickets,
         "duplicate": False,
     }
 

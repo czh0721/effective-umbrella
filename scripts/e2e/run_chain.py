@@ -251,18 +251,41 @@ def main():
           redeem.status_code == 200 and redeem.json()["coins"] == coins_before_redeem + 60,
           f"{coins_before_redeem}->{redeem.json().get('coins')}")
 
-    pkg = client.post("/api/admin/packages", json={"name": "体验包", "coins": 30, "credits": 300, "active": True})
+    pkg = client.post("/api/admin/packages", json={
+        "name": "体验包", "coins": 30, "credits": 300, "active": True,
+        "validity_days": 30, "bonus_credits": 20, "bonus_tickets": 1,
+    })
     check("后台创建套餐 200", pkg.status_code == 200, pkg.text[:140])
+    if pkg.status_code == 200:
+        created = pkg.json()["package"]
+        check("套餐返回赠送字段",
+              created.get("bonus_credits") == 20 and created.get("bonus_tickets") == 1,
+              str({k: created.get(k) for k in ("bonus_credits", "bonus_tickets")}))
+        check("套餐返回档位标签", created.get("validity_label") == "月度", str(created.get("validity_label")))
     packages = client.get("/api/credits").json()["packages"]
     target = next((p for p in packages if p.get("name") == "体验包"), None)
-    check("套餐出现在列表", target is not None, str(packages)[:120])
+    check("套餐出现在列表", target is not None and target.get("bonus_credits") == 20, str(packages)[:120])
     if target:
+        tickets_before = client.get("/api/credits").json().get("distill_tickets", {}).get("balance", 0)
         before_buy = client.get("/api/credits").json()
         buy = client.post(f"/api/packages/{target['id']}/purchase")
         after_buy = client.get("/api/credits").json()
         check("购买套餐 200", buy.status_code == 200, buy.text[:140])
-        check("扣念念币发积分", after_buy["coins"] == before_buy["coins"] - 30 and after_buy["balance"] == before_buy["balance"] + 300,
+        check("扣念念币发积分", after_buy["coins"] == before_buy["coins"] - 30 and after_buy["balance"] == before_buy["balance"] + 320,
               f"coins {before_buy['coins']}->{after_buy['coins']}, credits {before_buy['balance']}->{after_buy['balance']}")
+        check("套餐赠送蒸馏券",
+              after_buy.get("distill_tickets", {}).get("balance", 0) == tickets_before + 1,
+              f"{tickets_before}->{after_buy.get('distill_tickets', {}).get('balance')}")
+
+    prof = client.post("/api/profile", json={"nickname": "e2e小念", "avatar": "data:image/png;base64,iVBORw0KGgo="})
+    check("更新资料 200", prof.status_code == 200, prof.text[:140])
+    me_prof = client.get("/api/me").json()["user"]
+    check("昵称与头像已保存",
+          me_prof.get("nickname") == "e2e小念" and (me_prof.get("avatar") or "").startswith("data:image/"),
+          str({k: me_prof.get(k) for k in ("nickname", "avatar")}))
+    check("返回注册时间", bool(me_prof.get("created_at")), str(me_prof.get("created_at")))
+    bad_prof = client.post("/api/profile", json={"nickname": "念" * 21})
+    check("超长昵称被拒", bad_prof.status_code == 400, bad_prof.text[:120])
 
     grant_c = client.post(f"/api/admin/users/{user_id}/credits", json={"delta": 50, "reason": "e2e"})
     check("后台加积分 200", grant_c.status_code == 200, grant_c.text[:120])

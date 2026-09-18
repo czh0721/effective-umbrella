@@ -37,6 +37,16 @@ class CreditBatchTest(unittest.TestCase):
         expires = datetime.fromisoformat(batch["expires_at"])
         self.assertEqual((expires - created).days, 30)
 
+    def test_package_validity_labels(self):
+        self.assertEqual(store.credit_validity_label(30), "月度")
+        self.assertEqual(store.credit_validity_label(90), "季度")
+        self.assertEqual(store.credit_validity_label(365), "年度")
+        store.upsert_credit_package(None, "月度包", 100, 0, "", 50, True, coins=10, validity_days=30)
+        packages = store.list_credit_packages(active_only=True)
+        item = next(p for p in packages if p["name"] == "月度包")
+        self.assertEqual(item["validity_label"], "月度")
+        self.assertEqual(store.get_credit_package(item["id"])["validity_label"], "月度")
+
     def test_invalid_validity_raises(self):
         user = self._user("batch-bad-days")
         with self.assertRaises(store.InvalidValidityDays):

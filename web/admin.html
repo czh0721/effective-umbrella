@@ -277,7 +277,8 @@
     }
     function validityOptions(selected) {
       const value = Number(selected) || 30;
-      return [30, 90, 365].map((days) => `<option value="${days}"${days === value ? " selected" : ""}>${days} 天</option>`).join("");
+      const labels = { 30: "月度", 90: "季度", 365: "年度" };
+      return [30, 90, 365].map((days) => `<option value="${days}"${days === value ? " selected" : ""}>${labels[days]}（${days} 天）</option>`).join("");
     }
 
     /* ------------------------------------------------------------- charts */
@@ -675,7 +676,22 @@
 
       $("packageHead").innerHTML = headIcon("download", "积分套餐", '<span class="spacer"></span><button class="btn small" id="addPackage">新增套餐</button>');
       const packs = state.creditPackages || [];
-      $("packageList").innerHTML = packs.length ? packs.map((item) => `
+      const TIER_ORDER = [30, 90, 365];
+      const TIER_LABELS = { 30: "月度", 90: "季度", 365: "年度" };
+      if (!packs.length) {
+        $("packageList").innerHTML = emptyState("暂无套餐", "download");
+      } else {
+        const groups = new Map();
+        packs.forEach((item) => {
+          const days = Number(item.validity_days) || 0;
+          if (!groups.has(days)) groups.set(days, []);
+          groups.get(days).push(item);
+        });
+        const order = [...TIER_ORDER.filter((days) => groups.has(days)),
+          ...[...groups.keys()].filter((days) => !TIER_ORDER.includes(days))];
+        $("packageList").innerHTML = order.map((days) => {
+          const label = TIER_LABELS[days] || (days > 0 ? days + " 天" : "长期");
+          const cards = groups.get(days).map((item) => `
         <div class="pkg ${item.active ? "active" : ""}">
           ${item.badge ? `<span class="badge">${escapeHtml(item.badge)}</span>` : ""}
           <div class="field" style="margin-bottom:8px"><label>名称</label><input data-pkg-name="${item.id}" value="${escapeHtml(item.name)}" /></div>
@@ -688,11 +704,18 @@
             <div class="field"><label>积分</label><input data-pkg-credits="${item.id}" type="number" min="1" value="${item.credits}" /></div>
             <div class="field"><label>徽标</label><input data-pkg-badge="${item.id}" value="${escapeHtml(item.badge || "")}" placeholder="可选" /></div>
           </div>
+          <div class="form-grid" style="margin-top:0">
+            <div class="field"><label>赠送积分</label><input data-pkg-bonus-credits="${item.id}" type="number" min="0" value="${Number(item.bonus_credits) || 0}" /></div>
+            <div class="field"><label>赠送蒸馏券</label><input data-pkg-bonus-tickets="${item.id}" type="number" min="0" value="${Number(item.bonus_tickets) || 0}" /></div>
+          </div>
           <div class="pk-actions">
             <label class="switch" title="启用"><input type="checkbox" data-pkg-active="${item.id}" ${item.active ? "checked" : ""} /><span class="track"></span></label>
             <button class="btn small primary" style="margin-left:auto" data-pkg-save="${item.id}">保存</button>
           </div>
-        </div>`).join("") : emptyState("暂无套餐", "download");
+        </div>`).join("");
+          return `<div class="pkg-tier"><div class="pkg-tier-head">${escapeHtml(label)}<span>${days > 0 ? days + " 天" : ""}</span></div><div class="pkg-grid">${cards}</div></div>`;
+        }).join("");
+      }
       $("addPackage").onclick = openAddPackage;
     }
 
@@ -755,8 +778,10 @@
       const badge = document.querySelector(`[data-pkg-badge="${packageId}"]`).value.trim();
       const active = document.querySelector(`[data-pkg-active="${packageId}"]`).checked;
       const validity_days = Number(document.querySelector(`[data-pkg-days="${packageId}"]`).value) || 30;
+      const bonus_credits = Number(document.querySelector(`[data-pkg-bonus-credits="${packageId}"]`).value) || 0;
+      const bonus_tickets = Number(document.querySelector(`[data-pkg-bonus-tickets="${packageId}"]`).value) || 0;
       try {
-        await api("/api/admin/packages", { method: "POST", body: JSON.stringify({ id: packageId, name, credits, coins, badge, sort: packageId, active, validity_days }) });
+        await api("/api/admin/packages", { method: "POST", body: JSON.stringify({ id: packageId, name, credits, coins, badge, sort: packageId, active, validity_days, bonus_credits, bonus_tickets }) });
         toast("套餐已保存");
         await loadAll();
       } catch (error) { toast(error.message); }
@@ -770,6 +795,10 @@
           <div class="field"><label>定价(念念币)</label><input id="npkgCoins" type="number" min="0" value="180" /></div>
         </div>
         <div class="field"><label>有效期</label><select id="npkgDays">${validityOptions(90)}</select></div>
+        <div class="split">
+          <div class="field"><label>赠送积分</label><input id="npkgBonusCredits" type="number" min="0" value="0" /></div>
+          <div class="field"><label>赠送蒸馏券</label><input id="npkgBonusTickets" type="number" min="0" value="0" /></div>
+        </div>
         <div class="field"><label>徽标</label><input id="npkgBadge" placeholder="可选" /></div>
         <div class="btnrow"><button class="btn primary" id="npkgOk" style="flex:1">创建</button></div>`, (body, mask) => {
         body.querySelector("#npkgOk").onclick = async () => {
@@ -782,6 +811,8 @@
                 coins: Number(body.querySelector("#npkgCoins").value) || 0,
                 badge: body.querySelector("#npkgBadge").value.trim(),
                 validity_days: Number(body.querySelector("#npkgDays").value) || 30,
+                bonus_credits: Number(body.querySelector("#npkgBonusCredits").value) || 0,
+                bonus_tickets: Number(body.querySelector("#npkgBonusTickets").value) || 0,
                 sort: 99, active: true,
               }),
             });

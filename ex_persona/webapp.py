@@ -660,6 +660,7 @@ def _public_user(user: dict) -> dict:
         "nickname": user.get("nickname"),
         "avatar": user.get("avatar"),
         "role": user.get("role", "user"),
+        "created_at": user.get("created_at"),
     }
 
 
@@ -1210,6 +1211,13 @@ class PackageRequest(BaseModel):
     sort: int = 0
     active: bool = True
     validity_days: int = 30
+    bonus_credits: int = 0
+    bonus_tickets: int = 0
+
+
+class ProfileRequest(BaseModel):
+    nickname: str | None = None
+    avatar: str | None = None
 
 
 class ReportRequest(BaseModel):
@@ -1555,6 +1563,25 @@ def me(user: dict = Depends(current_user)) -> dict:
         "credits": credits,
         "notifications": {"unread": store.count_unread_alerts(user["id"])},
     }
+
+
+@app.post("/api/profile")
+def update_profile(payload: ProfileRequest, user: dict = Depends(current_user)) -> dict:
+    nickname = None
+    avatar = None
+    if payload.nickname is not None:
+        nickname = payload.nickname.strip()
+        if len(nickname) > 20:
+            raise HTTPException(status_code=400, detail="昵称最多 20 个字")
+    if payload.avatar is not None:
+        avatar = payload.avatar.strip()
+        if avatar:
+            if not avatar.startswith("data:image/"):
+                raise HTTPException(status_code=400, detail="头像格式不正确")
+            if len(avatar) > 400_000:
+                raise HTTPException(status_code=400, detail="头像图片过大，请换一张")
+    store.set_user_profile(user["id"], nickname=nickname, avatar=avatar)
+    return {"ok": True, "user": _public_user(store.get_user(user["id"]) or user)}
 
 
 @app.post("/api/account/password")
@@ -3788,12 +3815,15 @@ def admin_save_package(
         raise HTTPException(status_code=400, detail="积分数量需大于 0")
     if int(payload.coins) < 0:
         raise HTTPException(status_code=400, detail="念念币定价不能为负")
+    if int(payload.bonus_credits) < 0 or int(payload.bonus_tickets) < 0:
+        raise HTTPException(status_code=400, detail="赠送数量不能为负")
     try:
         days = store.normalize_validity_days(payload.validity_days)
         package = store.upsert_credit_package(
             payload.id, name, payload.credits, payload.price_cents,
             (payload.badge or "").strip(), payload.sort, payload.active,
             coins=payload.coins, validity_days=days,
+            bonus_credits=payload.bonus_credits, bonus_tickets=payload.bonus_tickets,
         )
     except store.InvalidValidityDays as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

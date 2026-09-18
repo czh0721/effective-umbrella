@@ -12,26 +12,21 @@
 </head>
 <body>
   <div class="shell" style="padding-top:22px">
-    <section class="glass card">
-      <div class="row">
-        <div class="avatar" id="userAvatar" style="border-radius:18px">念</div>
-        <div class="flex1">
-          <b id="userName" style="font-size:16px">加载中…</b>
-          <div class="row" style="gap:7px;margin-top:3px">
-            <span class="badge b-vip" id="userRole" style="display:none">管理员</span>
-            <span class="mini" id="userSub">念念用户</span>
-          </div>
-        </div>
+    <section class="profile-hero block stagger" id="profileHero" role="button" tabindex="0" aria-label="编辑资料">
+      <div class="avatar-wrap">
+        <div class="avatar" id="userAvatar">念</div>
+        <i class="online-dot" id="userOnlineDot" hidden></i>
       </div>
+      <div class="profile-info">
+        <div class="profile-name-row">
+          <b id="userName">加载中…</b>
+          <span class="badge b-vip" id="userRole" style="display:none">管理员</span>
+        </div>
+        <div class="mini" id="userSub">点击设置昵称</div>
+      </div>
+      <svg class="profile-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
     </section>
 
-    <div class="stat3 block stagger" id="statStrip">
-      <div><b data-count="0">0</b><span>分身</span></div>
-      <div><b data-count="0">0</b><span>微信在线</span></div>
-      <div><b data-count="0">0</b><span>已绑定</span></div>
-    </div>
-
-    <div class="group-title">资产</div>
     <div class="asset-card block stagger" id="creditCard"></div>
     <section class="asset-card block stagger">
       <div class="aw-head">
@@ -55,10 +50,14 @@
       </div>
       <div class="pack-row" id="ticketRow">
         <div class="pack-main">
-          <div class="pack-name">剩余 <b id="ticketCount">0</b> 张</div>
+          <div class="pack-name"><span class="pack-label">剩余</span></div>
+          <div class="pack-amount"><b id="ticketCount">0</b><span>张</span></div>
           <div class="pack-sub" id="ticketHint">每次蒸馏消耗 1 张，失败自动退还</div>
         </div>
-        <button class="btn small primary" id="buyTicketBtn">购买</button>
+        <div class="pack-side">
+          <div class="pack-note" id="ticketNote"></div>
+          <button class="btn small primary" id="buyTicketBtn">购买</button>
+        </div>
       </div>
     </section>
 
@@ -157,6 +156,8 @@
 
     let lastCredits = null;
 
+    const VALIDITY_LABELS = { 30: "月度", 90: "季度", 365: "年度" };
+
     function renderCredits(credits) {
       const data = credits || { balance: 0, used: 0, granted: 0, ratio: 0, per_turn_cost: 0, coins: 0, packages: [], ledger: [], coin_ledger: [] };
       lastCredits = data;
@@ -212,33 +213,71 @@
         : "平台模型尚未启用，请联系管理员";
       $("platformPill").textContent = data.platform_ready ? "平台提供" : "未启用";
       const packs = data.packages || [];
-      $("packageList").innerHTML = packs.length ? packs.map((p, i) => {
+      const TIER_ORDER = [30, 90, 365];
+      const groups = new Map(TIER_ORDER.map((days) => [days, []]));
+      packs.forEach((p) => {
+        const days = Number(p.validity_days) || 0;
+        if (!groups.has(days)) groups.set(days, []);
+        groups.get(days).push(p);
+      });
+      const tiers = [...groups.entries()].filter(([, items]) => items.length);
+      if (!tiers.length) {
+        $("packageList").innerHTML = '<div class="mini" style="padding:10px 0">暂无可用套餐</div>';
+        renderTickets(data);
+        return;
+      }
+      let card = 0;
+      const cardHtml = (p, days) => {
         const featured = !!p.badge;
         const short = Number(p.coins) > coins;
-        const days = Number(p.validity_days) || 0;
-        const validity = days > 0 ? " · 有效期 " + days + " 天" : "";
+        const bonusCredits = Number(p.bonus_credits) || 0;
+        const bonusTickets = Number(p.bonus_tickets) || 0;
+        const bonus = [
+          bonusCredits > 0 ? '<i class="bonus-chip">送 ' + bonusCredits + " 积分</i>" : "",
+          bonusTickets > 0 ? '<i class="bonus-chip">送 ' + bonusTickets + " 张蒸馏券</i>" : "",
+        ].join("");
         return `
-        <div class="pack-row" style="animation-delay:${i * 40}ms">
+        <div class="pack-row credit-pack${featured ? " featured" : ""}${short ? " is-short" : ""}" style="animation-delay:${(card++) * 40}ms">
           <div class="pack-main">
-            <div class="pack-name">${escapeHtml(p.name)}${featured ? ' <span class="pack-tag">' + escapeHtml(p.badge) + "</span>" : ""}</div>
-            <div class="pack-sub">${p.credits} 积分${validity}${short ? ' · <span class="pack-warn">念念币不足</span>' : ""}</div>
+            <div class="pack-name"><span class="pack-label">${escapeHtml(p.name)}</span>${featured ? '<span class="pack-tag">' + escapeHtml(p.badge) + "</span>" : ""}</div>
+            <div class="pack-amount"><b>${p.credits}</b><span>积分</span></div>
+            <div class="pack-sub">${days > 0 ? "有效期 " + days + " 天" : "长期有效"}</div>
+            ${bonus ? '<div class="pack-bonus">' + bonus + "</div>" : ""}
           </div>
-          <div class="pack-price">${p.coins > 0 ? "<b>" + p.coins + "</b><span>念念币</span>" : "<b>免费</b>"}</div>
-          <button class="btn small ${featured ? "primary" : "ghost"}" data-buy="${p.id}"${short ? " disabled" : ""}>兑换</button>
+          <div class="pack-side">
+            <div class="pack-price">${p.coins > 0 ? '<i class="coin-dot"></i><b>' + p.coins + "</b><span>念念币</span>" : "<b>免费</b>"}</div>
+            <div class="pack-note">${short ? "念念币不足" : ""}</div>
+            <button class="btn small ${featured ? "primary" : "ghost"}" data-buy="${p.id}"${short ? " disabled" : ""}>兑换</button>
+          </div>
         </div>`;
-      }).join("") : '<div class="mini" style="padding:10px 0">暂无可用套餐</div>';
-      $("packageList").querySelectorAll("[data-buy]").forEach((btn) => {
-        btn.onclick = async () => {
-          if (btn.disabled) return;
-          btn.disabled = true;
-          const idem = btn.dataset.idem || (btn.dataset.idem = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2)));
-          try {
-            await api("/api/packages/" + btn.dataset.buy + "/purchase", { method: "POST", headers: { "Idempotency-Key": idem } });
-            toast("套餐已到账");
-            await load();
-          } catch (error) { toast(error.message); btn.disabled = false; }
+      };
+      $("packageList").innerHTML = `
+        <div class="tabs" id="packTabs">${tiers.map(([days], i) =>
+          `<button class="tab${i === 0 ? " active" : ""}" data-days="${days}">${escapeHtml(VALIDITY_LABELS[days] || (days > 0 ? days + " 天" : "长期"))}</button>`
+        ).join("")}</div>
+        <div class="credit-pack-list" id="packBody" style="margin-top:12px"></div>`;
+      const drawTier = (days) => {
+        card = 0;
+        $("packBody").innerHTML = groups.get(days).map((p) => cardHtml(p, days)).join("");
+      };
+      $("packTabs").querySelectorAll(".tab").forEach((tab) => {
+        tab.onclick = () => {
+          $("packTabs").querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+          drawTier(Number(tab.dataset.days));
         };
       });
+      drawTier(tiers[0][0]);
+      $("packageList").onclick = async (event) => {
+        const btn = event.target.closest("[data-buy]");
+        if (!btn || btn.disabled) return;
+        btn.disabled = true;
+        const idem = btn.dataset.idem || (btn.dataset.idem = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2)));
+        try {
+          await api("/api/packages/" + btn.dataset.buy + "/purchase", { method: "POST", headers: { "Idempotency-Key": idem } });
+          toast("套餐已到账");
+          await load();
+        } catch (error) { toast(error.message); btn.disabled = false; }
+      };
       renderTickets(data);
     }
 
@@ -249,9 +288,8 @@
       const cost = Number(data.coins) || 0;
       $("ticketCount").textContent = count;
       $("ticketPrice").textContent = price > 0 ? ("单张 " + price + " 念念币") : "当前免费";
-      $("ticketHint").textContent = price > 0 && cost < price
-        ? "念念币不足，先兑换念念币再购买"
-        : "每次蒸馏消耗 1 张，失败自动退还";
+      const note = $("ticketNote");
+      if (note) note.textContent = price > 0 && cost < price ? "念念币不足" : "";
       const btn = $("buyTicketBtn");
       btn.textContent = price > 0 ? ("购买 · " + price) : "领取";
       btn.disabled = price > 0 && cost < price;
@@ -269,6 +307,15 @@
           await load();
         } catch (error) { toast(error.message); btn.disabled = false; }
       };
+    }
+
+    function joinDays(iso) {
+      if (!iso) return "";
+      const start = new Date(iso);
+      if (Number.isNaN(start.getTime())) return "";
+      const days = Math.floor((Date.now() - start.getTime()) / 86400000);
+      if (days < 1) return "今天加入念念";
+      return "加入念念 " + days + " 天";
     }
 
     function ledgerHtml(items, emptyText) {
@@ -297,20 +344,97 @@
       );
     }
 
+    function paintAvatar(node, user) {
+      const nick = (user.nickname || "").trim();
+      const label = nick || user.username || "念";
+      if (user.avatar) node.innerHTML = '<img src="' + String(user.avatar).replace(/"/g, "&quot;") + '" alt="" />';
+      else node.textContent = (label || "念").slice(0, 1).toUpperCase();
+    }
+
+    function readAvatar(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const image = new Image();
+          image.onload = () => {
+            const size = 256;
+            const canvas = document.createElement("canvas");
+            canvas.width = size;
+            canvas.height = size;
+            const ctx = canvas.getContext("2d");
+            const scale = Math.max(size / image.width, size / image.height);
+            const w = image.width * scale;
+            const h = image.height * scale;
+            ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+            resolve(canvas.toDataURL("image/jpeg", 0.86));
+          };
+          image.onerror = () => reject(new Error("图片读取失败，请换一张"));
+          image.src = reader.result;
+        };
+        reader.onerror = () => reject(new Error("图片读取失败，请换一张"));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function openProfileEditor(user) {
+      let avatarData = null;
+      openModal("编辑资料", `
+        <div class="profile-edit-head">
+          <button class="avatar avatar-lg" id="peAvatar" type="button"></button>
+          <div class="mini">点击更换头像</div>
+          <input type="file" id="peFile" accept="image/*" hidden />
+        </div>
+        <div class="field"><label for="peNick">昵称</label><input id="peNick" maxlength="20" placeholder="给自己起个昵称" /></div>
+        <div class="btnrow"><button class="btn primary wide" id="peSave">保存</button></div>`,
+        (body, mask) => {
+          const av = body.querySelector("#peAvatar");
+          const file = body.querySelector("#peFile");
+          const nick = body.querySelector("#peNick");
+          nick.value = (user.nickname || "").trim();
+          paintAvatar(av, user);
+          av.onclick = () => file.click();
+          file.onchange = async () => {
+            if (!file.files || !file.files[0]) return;
+            try {
+              avatarData = await readAvatar(file.files[0]);
+              av.innerHTML = '<img src="' + avatarData + '" alt="" />';
+            } catch (error) { toast(error.message); }
+          };
+          body.querySelector("#peSave").onclick = async () => {
+            const btn = body.querySelector("#peSave");
+            btn.disabled = true;
+            try {
+              const payload = { nickname: nick.value.trim() };
+              if (avatarData) payload.avatar = avatarData;
+              await api("/api/profile", { method: "POST", body: JSON.stringify(payload) });
+              closeModal(mask);
+              toast("资料已更新");
+              await load();
+            } catch (error) { toast(error.message); btn.disabled = false; }
+          };
+        });
+    }
+
     async function load() {
       const data = await me();
-      const name = data.user.username || data.user.nickname || "未设置";
-      $("userName").textContent = name;
-      $("userAvatar").textContent = name.slice(0, 1).toUpperCase();
-      if (data.user.role === "admin") { $("userRole").style.display = ""; $("adminRow").style.display = ""; }
+      const user = data.user || {};
+      const nick = (user.nickname || "").trim();
+      $("userName").textContent = nick || user.username || "未设置";
+      $("userSub").textContent = nick ? "@" + (user.username || "") : "点击设置昵称";
+      paintAvatar($("userAvatar"), user);
+      $("profileHero").onclick = () => openProfileEditor(user);
+      $("profileHero").onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openProfileEditor(user); } };
+      if (user.role === "admin") { $("userRole").style.display = ""; $("adminRow").style.display = ""; }
       const personas = data.personas || [];
       activePersonaId = data.active_persona_id || (personas[0] && personas[0].id) || null;
-      $("statStrip").innerHTML = `
-        <div><b data-count="${personas.length}">0</b><span>分身</span></div>
-        <div><b data-count="${data.wechat.running ? 1 : 0}">0</b><span>微信在线</span></div>
-        <div><b data-count="${data.wechat.bound ? 1 : 0}">0</b><span>已绑定</span></div>`;
-      animateCounts($("statStrip"));
-      $("wxHint").textContent = data.wechat.bound ? (data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未在线") : "尚未绑定微信";
+      const wxText = data.wechat.bound ? (data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未在线") : "尚未绑定微信";
+      const dot = $("userOnlineDot");
+      if (dot) {
+        dot.hidden = !data.wechat.bound;
+        dot.classList.toggle("idle", data.wechat.bound && !data.wechat.running);
+        dot.title = data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未运行";
+      }
+      $("wxHint").textContent = wxText;
 
       const credits = await api("/api/credits");
       renderCredits(credits);

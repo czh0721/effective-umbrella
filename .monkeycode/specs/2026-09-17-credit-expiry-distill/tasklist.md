@@ -62,4 +62,7 @@
 - [x] E4 e2e 新增链路并全量通过（`run_chain.py`，63/63）。
 - [x] E5 jsdom 探针：钱包页、首页积分卡、创建页券门槛、后台。
 - [x] E6 `ruff check ex_persona tests scripts` + 全量单测（342 通过）。
-- [ ] E7 部署前备份生产 DB，部署后逐项线上验证（买券扣币、无券 402、到期巡检日志）。
+- [x] E7 部署前备份生产 DB（`platform_20260918_082359.db`），部署后线上验证：
+  - 只读直连生产：`/api/credits` 套餐档位/有效期/批次/到期字段正确；管理员资料（昵称+头像）生效；念念币不足买券直连返回 402 且 coins/tickets 不变。
+  - 生产代码 + 生产库副本（`/tmp/e7check`，`sqlite3.backup`）跑 9 项：买券扣币 500->380（price 60×2）、发券 1->3、幂等不重复扣；无券预扣抛 `InsufficientDistillTickets`（402 等价）；到期清零 300->0 + 到期流水 + 批次标记 + 无负余额；72h 提醒仅一次。结果 `ALL PASS 9/9`。
+  - 生产服务 active、启动日志 `Application startup complete`、主进程 10 线程（含巡检 daemon）；当前无到期批次（最早 2026-10-18），故暂无巡检流水日志。
