@@ -28,10 +28,15 @@ class PackageTiersTest(unittest.TestCase):
             self.assertEqual(item["price_cents"], coins * 10, name)
         self.assertNotIn("标准包", names)
         self.assertNotIn("尊享包", names)
+        entry = next(p for p in packages if p["name"] == "体验包")
+        self.assertEqual(entry["credits"], 1000)
+        self.assertEqual(entry["coins"], 10)
+        self.assertEqual(entry["validity_days"], 30)
+        self.assertEqual(entry["price_cents"], 100)
 
     def test_tiers_margin_about_60_percent(self):
         cost_per_turn = 0.008
-        for name, credits, coins, _badge, _sort, _days, _bc, _bt in store.PACKAGE_TIERS:
+        for name, credits, coins, _badge, _sort, _days, _bc, _bt in (store.ENTRY_PACKAGE, *store.PACKAGE_TIERS):
             rounds = credits / 20
             cost = rounds * cost_per_turn
             revenue = coins / 10

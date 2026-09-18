@@ -575,7 +575,11 @@ PACKAGE_TIERS = (
 # 被新档位替换的旧跨时长套餐，一次性下架（保留数据与历史订单）。
 LEGACY_PACKAGE_NAMES = ("标准包", "尊享包")
 
-DEFAULT_PACKAGES = (("体验包", 100, 10, "", 1, 30),) + tuple(
+# 入门体验包：¥1（10 念念币）获得 1000 积分，与主套餐口径一致（100 积分/币，约 50 轮，
+# 同样 60% 毛利），用于极低门槛试用。
+ENTRY_PACKAGE = ("体验包", 1000, 10, "", 1, 30, 0, 0)
+
+DEFAULT_PACKAGES = (ENTRY_PACKAGE[:6],) + tuple(
     (name, credits, coins, badge, sort, days)
     for name, credits, coins, badge, sort, days, _bonus_credits, _bonus_tickets in PACKAGE_TIERS
 )
@@ -689,6 +693,7 @@ def init_db() -> None:
             _migrate_admin_console(conn)
             _migrate_account_security(conn)
             _migrate_package_tiers(conn)
+            _migrate_entry_package(conn)
             seed_at = utcnow()
             conn.executemany(
                 "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
@@ -805,6 +810,36 @@ def _migrate_package_tiers(conn: sqlite3.Connection) -> None:
         (now, *LEGACY_PACKAGE_NAMES),
     )
     _meta_set(conn, "package_tiers_v1", "1")
+
+
+def _migrate_entry_package(conn: sqlite3.Connection) -> None:
+    """把入门体验包一次性对齐到 100 积分/币口径（幂等，只执行一次）。
+
+    旧体验包为 10 念念币 / 100 积分，只有主套餐档位 1/10 的性价比。这里改为
+    10 念念币 / 1000 积分，与主套餐一致。用 ``schema_meta`` 标记保证只执行一次。
+    """
+    if _meta_get(conn, "entry_package_v2") == "1":
+        return
+    now = utcnow()
+    name, credits, coins, badge, sort, days, bonus_credits, bonus_tickets = ENTRY_PACKAGE
+    row = conn.execute("SELECT id FROM credit_packages WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO credit_packages (name, credits, coins, price_cents, badge, sort,"
+            " active, validity_days, bonus_credits, bonus_tickets, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)",
+            (name, int(credits), int(coins), int(coins) * 10, badge, int(sort), int(days),
+             int(bonus_credits), int(bonus_tickets), now, now),
+        )
+    else:
+        conn.execute(
+            "UPDATE credit_packages SET credits = ?, coins = ?, price_cents = ?, badge = ?,"
+            " sort = ?, active = 1, validity_days = ?, bonus_credits = ?, bonus_tickets = ?,"
+            " updated_at = ? WHERE id = ?",
+            (int(credits), int(coins), int(coins) * 10, badge, int(sort), int(days),
+             int(bonus_credits), int(bonus_tickets), now, int(row["id"])),
+        )
+    _meta_set(conn, "entry_package_v2", "1")
 
 
 def _meta_get(conn: sqlite3.Connection, key: str) -> str:
