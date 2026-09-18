@@ -230,6 +230,23 @@ class CreditApiTest(unittest.TestCase):
             self.assertIn("balance", me["credits"])
             self.assertIn("per_turn_cost", me["credits"])
 
+    def test_me_includes_personal_stats(self):
+        with TestClient(app) as client:
+            user = self._register(client, "stats-me")
+            me = client.get("/api/me").json()
+            self.assertEqual(me["stats"]["persona_count"], 0)
+            self.assertEqual(me["stats"]["memory_total"], 0)
+
+            persona = store.create_persona(
+                user["id"], "阿念", os.path.join(_TMP.name, "persona-stats")
+            )
+            store.add_memory(user["id"], persona["id"], "wx:test@im.wechat", "fact", "喜欢雨天")
+            store.add_memory(user["id"], persona["id"], "wx:test@im.wechat", "fact", "常喝美式")
+
+            me = client.get("/api/me").json()
+            self.assertEqual(me["stats"]["persona_count"], 1)
+            self.assertEqual(me["stats"]["memory_total"], 2)
+
     def test_admin_grant_and_deduct(self):
         with TestClient(app) as client:
             self._admin(client, "credit-admin-grant")

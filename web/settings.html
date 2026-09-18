@@ -12,18 +12,23 @@
 </head>
 <body>
   <div class="shell" style="padding-top:22px">
-    <section class="profile-hero block stagger" id="profileHero" role="button" tabindex="0" aria-label="编辑资料">
-      <div class="avatar-wrap">
-        <div class="avatar" id="userAvatar">念</div>
-        <i class="online-dot" id="userOnlineDot" hidden></i>
-      </div>
-      <div class="profile-info">
-        <div class="profile-name-row">
-          <b id="userName">加载中…</b>
+    <section class="glass card phf block stagger" id="profileHero" role="button" tabindex="0" aria-label="编辑资料">
+      <div class="ph-top">
+        <div class="phf-ring avatar-wrap">
+          <div class="avatar" id="userAvatar">念</div>
+          <i class="online-dot" id="userOnlineDot" hidden></i>
         </div>
-        <div class="mini" id="userSub">点击设置昵称</div>
+        <div class="ph-main">
+          <div class="phf-name"><b id="userName">加载中…</b></div>
+          <div class="phf-handle" id="userSub">点击设置昵称</div>
+        </div>
+        <svg class="phf-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
       </div>
-      <svg class="profile-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+      <div class="phf-stats">
+        <div class="phf-stat"><span class="num" id="statPersonas">0</span><span class="lab">分身</span></div>
+        <div class="phf-stat"><span class="num" id="statDays">0<span class="unit">天</span></span><span class="lab">陪伴</span></div>
+        <div class="phf-stat"><span class="num" id="statMemories">0</span><span class="lab">记忆</span></div>
+      </div>
     </section>
 
     <div class="asset-card block stagger" id="creditCard"></div>
@@ -414,11 +419,16 @@
       const user = data.user || {};
       const nick = (user.nickname || "").trim();
       $("userName").textContent = nick || user.username || "未设置";
-      $("userSub").textContent = nick ? "@" + (user.username || "") : "点击设置昵称";
+      $("userSub").textContent = "@" + (user.username || "");
       paintAvatar($("userAvatar"), user);
       $("profileHero").onclick = () => openProfileEditor(user);
       $("profileHero").onkeydown = (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openProfileEditor(user); } };
       const personas = data.personas || [];
+      const stats = data.stats || {};
+      $("statPersonas").textContent = stats.persona_count != null ? stats.persona_count : personas.length;
+      $("statMemories").textContent = stats.memory_total != null ? stats.memory_total : 0;
+      const days = user.created_at ? Math.max(1, Math.floor((Date.now() - Date.parse(user.created_at)) / 86400000) + 1) : 1;
+      $("statDays").innerHTML = days + '<span class="unit">天</span>';
       activePersonaId = data.active_persona_id || (personas[0] && personas[0].id) || null;
       const wxText = data.wechat.bound ? (data.wechat.running ? "微信在线 · 自动回复中" : "已绑定 · 未在线") : "尚未绑定微信";
       const dot = $("userOnlineDot");

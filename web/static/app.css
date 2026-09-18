@@ -371,6 +371,48 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .profile-name-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .profile-name-row b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 750; letter-spacing: -.01em; color: var(--ink); }
 .profile-info .mini { margin-top: 2px; }
+
+/* -------- 个人卡：氛围光晕 + 数据底栏（精修版） -------- */
+.card.phf {
+  position: relative; display: flex; flex-direction: column;
+  padding: 19px 19px 9px; overflow: hidden; isolation: isolate;
+  transition: transform .28s var(--spring), box-shadow .28s;
+}
+.card.phf:active { transform: scale(.985); }
+.phf::before {
+  content: ""; position: absolute; z-index: -1;
+  right: -64px; top: -78px; width: 230px; height: 230px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(124, 92, 255, .30) 0%, rgba(155, 123, 255, .14) 46%, transparent 70%);
+}
+.phf .ph-top { display: flex; align-items: center; gap: 14px; }
+.phf .ph-main { flex: 1; min-width: 0; }
+.phf-ring {
+  position: relative; width: 60px; height: 60px; flex: none;
+  border-radius: 18px; box-shadow: 0 10px 22px -12px rgba(22, 22, 29, .35);
+}
+.phf-ring .avatar {
+  width: 100%; height: 100%; border-radius: 18px; box-shadow: none;
+  font-size: 23px; font-weight: 700; background: #fff; color: var(--v);
+  border: none; overflow: hidden;
+}
+.phf-name { display: flex; align-items: center; gap: 8px; }
+.phf-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 19.5px; font-weight: 780; letter-spacing: -.01em; color: var(--ink); }
+.phf-handle { font-size: 12.5px; color: var(--text-3); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.phf-chev { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--text-3); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
+.phf-stats { display: flex; margin-top: 17px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+.phf-stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; position: relative; }
+.phf-stat + .phf-stat::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 1px; height: 24px; background: var(--hairline);
+}
+.phf-stat .num {
+  font-size: 19px; font-weight: 800; letter-spacing: -.02em; line-height: 1;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, #6d4bff 0%, #9b7bff 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.phf-stat .num .unit { font-size: 11px; font-weight: 700; margin-left: 1px; -webkit-text-fill-color: #9b7bff; }
+.phf-stat .lab { font-size: 11px; color: var(--text-3); }
 .meta-dot { width: 3px; height: 3px; border-radius: 50%; background: currentColor; opacity: .38; }
 .profile-edit-head { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-bottom: 16px; }
 .avatar-lg { width: 84px; height: 84px; border-radius: 26px; font-size: 28px; padding: 0; border: none; cursor: pointer; }

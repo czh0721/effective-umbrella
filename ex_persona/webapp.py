@@ -1577,8 +1577,10 @@ def me(user: dict = Depends(current_user)) -> dict:
     credits["coins"] = store.get_coins(user["id"])
     credits["distill_tickets"] = store.get_distill_tickets(user["id"])
     credits["distill_ticket_price"] = platform_config.distill_ticket_price
+    memory_total = sum(store.count_memories(user["id"], persona["id"]) for persona in personas)
     return {
         "user": _public_user(user),
+        "stats": {"persona_count": len(personas), "memory_total": memory_total},
         "personas": [_persona_summary(user["id"], persona, channel) for persona in personas],
         "active_persona_id": active["id"] if active else None,
         "config": {
