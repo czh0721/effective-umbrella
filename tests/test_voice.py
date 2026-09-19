@@ -132,5 +132,111 @@ class VoiceClientTest(unittest.TestCase):
         self.assertTrue(upload.called and request.called)
 
 
+class DoubaoProviderTest(unittest.TestCase):
+    def test_preset_mapping_is_provider_specific(self):
+        self.assertEqual(
+            voice.system_voice_id("female-2", "doubao"),
+            "zh_female_gaolengyujie_uranus_bigtts",
+        )
+        self.assertEqual(voice.system_voice_id("male-1", "minimax"), "male-qn-qingse")
+        self.assertNotEqual(
+            voice.system_voice_id("female-1", "doubao"),
+            voice.system_voice_id("female-1", "minimax"),
+        )
+
+    def test_resource_id_derivation(self):
+        self.assertEqual(voice.doubao_resource_id("custom_voice", is_clone=True), "seed-icl-2.0")
+        self.assertEqual(voice.doubao_resource_id("S_abc"), "seed-icl-2.0")
+        self.assertEqual(
+            voice.doubao_resource_id("zh_female_vv_uranus_bigtts"), "seed-tts-2.0"
+        )
+        self.assertEqual(voice.doubao_resource_id("zh_female_cancan_mars_bigtts"), "seed-tts-1.0")
+        self.assertEqual(
+            voice.doubao_resource_id("x", override="custom.resource"), "custom.resource"
+        )
+
+    def test_tts_concatenates_streamed_chunks(self):
+        import base64 as b64
+
+        raw = "\n".join([
+            json.dumps({"code": 0, "data": b64.b64encode(b"ID3").decode()}),
+            json.dumps({"code": 0, "data": b64.b64encode(b"tail").decode()}),
+        ])
+        with mock.patch.object(voice, "_doubao_post", return_value=raw) as posted:
+            audio = voice.doubao_tts(
+                "你好", "zh_female_vv_uranus_bigtts", app_id="a", access_token="t"
+            )
+        self.assertEqual(audio, b"ID3tail")
+        headers = posted.call_args.args[2]
+        self.assertEqual(headers["X-Api-Resource-Id"], "seed-tts-2.0")
+        self.assertEqual(headers["X-Api-App-Key"], "a")
+        self.assertNotIn("X-Api-Key", headers)
+        payload = posted.call_args.args[1]
+        self.assertEqual(payload["req_params"]["speaker"], "zh_female_vv_uranus_bigtts")
+
+    def test_tts_prefers_api_key_header(self):
+        raw = json.dumps({"code": 0, "data": base64_id3()})
+        with mock.patch.object(voice, "_doubao_post", return_value=raw) as posted:
+            voice.doubao_tts("hi", "S_x", api_key="k", is_clone=True)
+        headers = posted.call_args.args[2]
+        self.assertEqual(headers["X-Api-Key"], "k")
+        self.assertEqual(headers["X-Api-Resource-Id"], "seed-icl-2.0")
+
+    def test_tts_reports_error_code(self):
+        raw = json.dumps({"code": 55000000, "message": "resource ID is mismatched"})
+        with mock.patch.object(voice, "_doubao_post", return_value=raw):
+            with self.assertRaises(voice.VoiceError):
+                voice.doubao_tts("hi", "x", app_id="a", access_token="t")
+
+    def test_tts_requires_credentials(self):
+        with self.assertRaises(voice.VoiceError):
+            voice.doubao_tts("hi", "x")
+
+    @unittest.skipUnless(voice.ffmpeg_available(), "ffmpeg 不可用")
+    def test_clone_posts_custom_speaker(self):
+        sample = Path(tempfile.mkdtemp()) / "sample.wav"
+        _make_wav(sample, 11.0)
+        with mock.patch.object(voice, "_doubao_post", return_value='{"code":0}') as posted:
+            result = voice.doubao_clone(
+                [str(sample)], voice_id="nianabc123", app_id="a", access_token="t"
+            )
+        self.assertEqual(result["voice_id"], "nianabc123")
+        payload = posted.call_args.args[1]
+        self.assertEqual(payload["speaker_id"], "custom_speaker_id")
+        self.assertEqual(payload["custom_speaker_id"], "nianabc123")
+        self.assertTrue(payload["audio"]["data"])
+
+    def test_synthesize_dispatches_by_provider(self):
+        creds = voice.VoiceCredentials(provider="minimax", minimax_api_key="mm")
+        with mock.patch.object(
+            voice, "minimax_tts", return_value=b"ID3"
+        ) as minimax:
+            audio = voice.synthesize("hi", "female-shaonv", creds)
+        self.assertEqual(audio, b"ID3")
+        self.assertEqual(minimax.call_args.args[1], "female-shaonv")
+
+    def test_synthesize_requires_ready_credentials(self):
+        creds = voice.VoiceCredentials(provider="doubao")
+        with self.assertRaises(voice.VoiceError):
+            voice.synthesize("hi", "x", creds)
+
+    def test_credentials_from_config_object(self):
+        class Cfg:
+            voice_provider = "doubao"
+            doubao_api_key = "dk"
+            doubao_app_id = "app"
+            minimax_api_key = ""
+
+        creds = voice.credentials(Cfg())
+        self.assertEqual(creds.provider, "doubao")
+        self.assertTrue(creds.ready)
+
+
+def base64_id3() -> str:
+    import base64 as b64
+
+    return b64.b64encode(b"ID3").decode()
+
+
 if __name__ == "__main__":
     unittest.main()

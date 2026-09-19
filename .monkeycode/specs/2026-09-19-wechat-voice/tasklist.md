@@ -71,6 +71,15 @@
 - [x] 提交并 push `main`。
 - [x] 部署生产并核对（含 DB 备份、weclaw 重新编译同步）。
 
+## T11 多提供商（MiniMax / 豆包）
+
+- [x] `store.py`：`platform_config` 增 `voice_provider`/`doubao_*` 列；`upsert_voice_clone` 记录 `provider`；`set_platform_config` 支持豆包字段。
+- [x] `config.py`：`PlatformConfig` 增豆包字段与 `voice_credentials_ready`；按提供商判定 `voice_ready`；支持 `PERSONA_DOUBAO_*` 环境变量。
+- [x] `voice.py`：`VoiceCredentials` + `credentials()`；`synthesize()`/`clone()` 分派；豆包 `doubao_tts`（V3 分块 JSON）与 `doubao_clone`（V3 复刻）；按提供商解析预设音色与资源 ID。
+- [x] `webapp.py`：克隆/合成/试听改走分派；后台配置读写与脱敏字段；`voice_provider` 写审计。
+- [x] `admin.html`：新增「语音提供商」下拉与豆包 API Key / App ID / Access Token / 资源 ID 字段。
+- [x] `tests/test_voice.py` 豆包用例；`tests/test_voice_clone.py` 提供商切换与就绪判定；`tests/test_contracts.py` 豆包端点与后台字段契约。
+
 ## 验证记录
 
 - 真实样本：iLink 下发编码为 `#!SILK_V3`（两条 5.83s + 6.49s）；在服务器编译 `kn007/silk-v3-decoder` 解码器并装到 `/opt/nian/bin/silk_v3_decoder`，`SILK_DECODER_BIN` 写入 `/opt/nian/.env`。
@@ -78,3 +87,4 @@
 - 测试：`python3 -m ruff check ex_persona tests` 全过；`python3 -m unittest discover -s tests` 490 全过；`python3 scripts/e2e/run_chain.py` 129/129。
 - 生产：新 weclaw 二进制装 `/opt/nian/bin/weclaw`（备份 `weclaw.bak.20260919_041433`），部署 `20260919_042641`（T1 数据层）、`20260919_044538`（语音全量）；DB 含 `voice_samples`/`voice_clones` 与语音配置列。
 - 待管理员在后台「语音设置」填入 MiniMax Key 并开启后，出站语音与克隆才会生效。
+- 多提供商增量：`ruff check ex_persona tests` 全过；`unittest discover` 504 全过；`scripts/e2e/run_chain.py` 129/129。豆包接口按官方 V3 文档实现，需管理员填入豆包 App ID + Access Token（或 API Key）后做一次真实联调验证。

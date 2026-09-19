@@ -21,6 +21,7 @@ from ex_persona.webapp import app  # noqa: E402
 def _configure_voice(clone_cost=500, reply_cost=20, enabled=True):
     store.set_platform_config(
         "", "https://api.deepseek.com/v1", "deepseek-chat", True, 0, 0,
+        voice_provider="minimax",
         minimax_api_key_encrypted=crypto.encrypt("mm-key") if enabled else "",
         voice_tts_model="speech-02-turbo",
         voice_clone_cost=clone_cost,
@@ -176,7 +177,8 @@ class VoiceAdminConfigTest(unittest.TestCase):
                 "/api/admin/platform",
                 json={
                     "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat",
-                    "enabled": True, "minimax_api_key": "mm-secret-key",
+                    "enabled": True, "voice_provider": "minimax",
+                    "minimax_api_key": "mm-secret-key",
                     "voice_tts_model": "speech-02-hd", "voice_clone_cost": 600,
                     "voice_reply_cost": 30, "voice_enabled": True,
                 },
@@ -190,6 +192,43 @@ class VoiceAdminConfigTest(unittest.TestCase):
             self.assertEqual(data["voice_reply_cost"], 30)
             self.assertTrue(data["voice_enabled"])
             self.assertTrue(data["voice_ready"])
+
+    def test_doubao_provider_roundtrip(self):
+        username = f"vadmin-{uuid.uuid4().hex[:8]}"
+        accounts.create_admin(username, "Password123!")
+        with TestClient(app) as client:
+            login = client.post(
+                "/api/admin/auth/login", json={"username": username, "password": "Password123!"}
+            )
+            self.assertEqual(login.status_code, 200, login.text)
+            response = client.put(
+                "/api/admin/platform",
+                json={
+                    "base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat",
+                    "enabled": True, "voice_provider": "doubao",
+                    "doubao_app_id": "1234567890", "doubao_access_token": "dbt-secret",
+                    "doubao_resource_id": "seed-icl-2.0", "voice_enabled": True,
+                },
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertNotIn("dbt-secret", response.text)
+            data = response.json()
+            self.assertEqual(data["voice_provider"], "doubao")
+            self.assertEqual(data["doubao_app_id"], "1234567890")
+            self.assertTrue(data["has_doubao_token"])
+            self.assertTrue(data["voice_ready"])
+
+    def test_doubao_provider_without_credentials_not_ready(self):
+        store.set_platform_config(
+            "", "https://api.deepseek.com/v1", "deepseek-chat", True, 0, 0,
+            voice_provider="doubao", voice_enabled=True,
+            doubao_api_key_encrypted="", doubao_app_id="",
+            doubao_access_token_encrypted="",
+        )
+        cfg = config.load_platform_config()
+        self.assertEqual(cfg.voice_provider, "doubao")
+        self.assertFalse(cfg.voice_credentials_ready)
+        self.assertFalse(cfg.voice_ready)
 
 
 if __name__ == "__main__":

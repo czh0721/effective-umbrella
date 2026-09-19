@@ -46,9 +46,17 @@ class PlatformConfig:
     # 历史字段（已退役）：原「注册赠送蒸馏次数」。
     # 蒸馏券取消后已并入 new_user_gift，保留列以兼容历史数据与迁移幂等。
     distill_ticket_gift: int = 0
-    # 语音能力：MiniMax Key 由管理员配置，供 TTS 与音色克隆统一使用。
+    # 语音能力：由管理员在后台选择提供商并配置密钥，供 TTS 与音色克隆统一使用。
+    # voice_provider 取 "minimax" 或 "doubao"。
+    voice_provider: str = "minimax"
     minimax_api_key: str = ""
     voice_tts_model: str = "speech-02-turbo"
+    # 豆包（火山引擎）：新版控制台 API Key 或旧版 AppID + Access Token 二选一。
+    doubao_api_key: str = ""
+    doubao_app_id: str = ""
+    doubao_access_token: str = ""
+    # 豆包资源 ID 覆盖；留空时按音色自动推断（复刻 seed-icl-2.0 / 2.0 seed-tts-2.0）。
+    doubao_resource_id: str = ""
     # 音色克隆一次扣减的积分；0 表示免费。
     voice_clone_cost: int = 500
     # 每条语音回复在基础每轮扣费之外额外扣减的积分；0 表示免费。
@@ -61,8 +69,17 @@ class PlatformConfig:
         return bool(self.api_key) and self.enabled
 
     @property
+    def voice_credentials_ready(self) -> bool:
+        """当前提供商是否至少配置了一组可用凭据。"""
+        if self.voice_provider == "doubao":
+            return bool(self.doubao_api_key) or bool(
+                self.doubao_app_id and self.doubao_access_token
+            )
+        return bool(self.minimax_api_key)
+
+    @property
     def voice_ready(self) -> bool:
-        return bool(self.minimax_api_key) and self.voice_enabled
+        return self.voice_credentials_ready and self.voice_enabled
 
 
 def load_llm_config() -> LLMConfig:
@@ -89,6 +106,9 @@ def load_platform_config() -> PlatformConfig:
         load_dotenv()
     env_key = (os.getenv("PERSONA_PLATFORM_API_KEY") or "").strip()
     env_voice_key = (os.getenv("PERSONA_MINIMAX_API_KEY") or "").strip()
+    env_doubao_key = (os.getenv("PERSONA_DOUBAO_API_KEY") or "").strip()
+    env_doubao_appid = (os.getenv("PERSONA_DOUBAO_APP_ID") or "").strip()
+    env_doubao_token = (os.getenv("PERSONA_DOUBAO_ACCESS_TOKEN") or "").strip()
     try:
         daily_limit = int(os.getenv("PERSONA_PLATFORM_DAILY_LIMIT") or "0")
     except ValueError:
@@ -100,7 +120,10 @@ def load_platform_config() -> PlatformConfig:
         daily_limit=max(daily_limit, 0),
         enabled=bool(env_key),
         minimax_api_key=env_voice_key,
-        voice_enabled=bool(env_voice_key),
+        doubao_api_key=env_doubao_key,
+        doubao_app_id=env_doubao_appid,
+        doubao_access_token=env_doubao_token,
+        voice_enabled=bool(env_voice_key or env_doubao_key or (env_doubao_appid and env_doubao_token)),
     )
     try:
         from . import crypto, store
@@ -130,8 +153,27 @@ def load_platform_config() -> PlatformConfig:
         reply_cost = row.get("voice_reply_cost")
         config.voice_reply_cost = int(reply_cost) if reply_cost not in (None, "") else 20
         config.voice_enabled = bool(row.get("voice_enabled"))
+        provider = (row.get("voice_provider") or "").strip().lower()
+        if provider:
+            config.voice_provider = provider
+        doubao_encrypted = row.get("doubao_api_key_encrypted") or ""
+        if doubao_encrypted:
+            config.doubao_api_key = crypto.decrypt(doubao_encrypted)
+        config.doubao_app_id = row.get("doubao_app_id") or config.doubao_app_id
+        doubao_token_encrypted = row.get("doubao_access_token_encrypted") or ""
+        if doubao_token_encrypted:
+            config.doubao_access_token = crypto.decrypt(doubao_token_encrypted)
+        config.doubao_resource_id = row.get("doubao_resource_id") or config.doubao_resource_id
     if not config.minimax_api_key and env_voice_key:
         config.minimax_api_key = env_voice_key
-    if config.minimax_api_key and row is None:
+    if not config.doubao_api_key and env_doubao_key:
+        config.doubao_api_key = env_doubao_key
+    if not config.doubao_app_id and env_doubao_appid:
+        config.doubao_app_id = env_doubao_appid
+    if not config.doubao_access_token and env_doubao_token:
+        config.doubao_access_token = env_doubao_token
+    if config.voice_provider not in ("minimax", "doubao"):
+        config.voice_provider = "minimax"
+    if config.voice_credentials_ready and row is None:
         config.voice_enabled = True
     return config

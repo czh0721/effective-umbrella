@@ -172,6 +172,20 @@ CREATE TABLE IF NOT EXISTS voice_clones (
 - 手工验证：用 Playwright 打开语音设置，点击试听确认音频返回；模拟样本不足与未同意的错误提示。
 - 回归：`python3 -m unittest discover -s tests`、`python3 -m ruff check ex_persona tests`、`python3 scripts/e2e/run_chain.py` 全绿。
 
+## 增量：多提供商（MiniMax / 豆包）
+
+平台新增 `voice_provider`（`minimax` 默认 / `doubao`），两套凭据并存、后台可切换，用户端行为不变。
+
+- 数据层：`platform_config` 再增 `voice_provider TEXT NOT NULL DEFAULT 'minimax'`、`doubao_api_key_encrypted`、`doubao_app_id`、`doubao_access_token_encrypted`、`doubao_resource_id`；`voice_clones.provider` 记录发起时的提供商。
+- 抽象：`voice.VoiceCredentials` + `voice.credentials(config)` 汇总凭据；`voice.synthesize(text, voice_id, creds, is_clone=)` 与 `voice.clone(samples, voice_id, creds)` 按 `provider` 分派到 `minimax_*` 或 `doubao_*`。`minimax_tts`/`minimax_clone` 保持不变。
+- 预设音色按提供商映射：`PRESET_VOICES_BY_PROVIDER`；`system_voice_id(preset, provider)` / `active_voice_id(settings, provider)`。豆包映射到 2.0 音色（如 `zh_female_gaolengyujie_uranus_bigtts`）。
+- 豆包接口（V3）：
+  - 合成 `POST {base}/api/v3/tts/unidirectional`，`X-Api-Resource-Id` 按音色推断（复刻 `seed-icl-2.0` / 2.0 `seed-tts-2.0` / 1.0 `seed-tts-1.0`），响应为分块 JSON，逐块取 `data` base64 拼接为 mp3。
+  - 复刻 `POST {base}/api/v3/tts/voice_clone`，`speaker_id="custom_speaker_id"` + `custom_speaker_id=<voice_id>`，音频 base64 放入 `audio.data`。
+  - 鉴权：新版控制台 `X-Api-Key`；旧版控制台 `X-Api-App-Key` + `X-Api-Access-Key`，二选一。
+- 就绪判定：`PlatformConfig.voice_credentials_ready` 按当前提供商判断；`voice_ready = 就绪 && voice_enabled`。豆包凭据缺失不会误判为已就绪。
+- 后台：`/api/admin/platform` 增 `voice_provider`、`doubao_app_id`、`doubao_resource_id` 与豆包密钥的 `has_*`/脱敏字段；`admin.html` 增提供商下拉与豆包字段。密钥仍仅存密文、不回显。
+
 ## References
 
 [^1]: (handler.go#L734) - [weclaw 语音转写 extractVoiceText](../../../scripts/weclaw/nian.patch)

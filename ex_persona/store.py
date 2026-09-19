@@ -575,6 +575,11 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "voice_clone_cost": "INTEGER NOT NULL DEFAULT 500",
         "voice_reply_cost": "INTEGER NOT NULL DEFAULT 20",
         "voice_enabled": "INTEGER NOT NULL DEFAULT 0",
+        "voice_provider": "TEXT NOT NULL DEFAULT 'minimax'",
+        "doubao_api_key_encrypted": "TEXT NOT NULL DEFAULT ''",
+        "doubao_app_id": "TEXT NOT NULL DEFAULT ''",
+        "doubao_access_token_encrypted": "TEXT NOT NULL DEFAULT ''",
+        "doubao_resource_id": "TEXT NOT NULL DEFAULT ''",
     },
     "proactive_log": {"kind": "TEXT NOT NULL DEFAULT ''"},
 }
@@ -3649,6 +3654,9 @@ def delete_sticker(user_id: int, persona_id: int, sticker_id: int) -> dict | Non
 
 VOICE_SAMPLE_KEEP = 20
 VOICE_CLONE_STATUSES = ("pending", "ready", "failed")
+# 语音提供商：MiniMax（默认，历史数据）与豆包（火山引擎）。
+VOICE_PROVIDERS = ("minimax", "doubao")
+DEFAULT_VOICE_PROVIDER = "minimax"
 # 语音回复与音色克隆的积分流水原因，后台用量统计也据此归类。
 VOICE_REPLY_CHARGE_REASON = "语音回复扣费"
 VOICE_CLONE_CHARGE_REASON = "音色克隆扣费"
@@ -3761,20 +3769,24 @@ def upsert_voice_clone(
     voice_id: str = "",
     error: str = "",
     sample_seconds: float = 0.0,
+    provider: str = DEFAULT_VOICE_PROVIDER,
 ) -> dict:
     _ensure()
     if status not in VOICE_CLONE_STATUSES:
         status = "pending"
+    if provider not in VOICE_PROVIDERS:
+        provider = DEFAULT_VOICE_PROVIDER
     now = utcnow()
     with _lock, connect() as conn:
         conn.execute(
             "INSERT INTO voice_clones (user_id, persona_id, contact, provider, voice_id, status,"
             " error, sample_seconds, created_at, updated_at)"
-            " VALUES (?, ?, ?, 'minimax', ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT(persona_id, contact) DO UPDATE SET status = excluded.status,"
-            " voice_id = excluded.voice_id, error = excluded.error,"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(persona_id, contact) DO UPDATE SET provider = excluded.provider,"
+            " status = excluded.status, voice_id = excluded.voice_id, error = excluded.error,"
             " sample_seconds = excluded.sample_seconds, updated_at = excluded.updated_at",
-            (user_id, persona_id, contact, voice_id, status, error, float(sample_seconds), now, now),
+            (user_id, persona_id, contact, provider, voice_id, status, error,
+             float(sample_seconds), now, now),
         )
     return get_voice_clone(user_id, persona_id, contact) or {}
 
@@ -4807,6 +4819,11 @@ def set_platform_config(
     voice_clone_cost: int | None = None,
     voice_reply_cost: int | None = None,
     voice_enabled: bool | None = None,
+    voice_provider: str | None = None,
+    doubao_api_key_encrypted: str | None = None,
+    doubao_app_id: str | None = None,
+    doubao_access_token_encrypted: str | None = None,
+    doubao_resource_id: str | None = None,
 ) -> dict:
     _ensure()
     current = get_platform_config_row() or {}
@@ -4845,13 +4862,33 @@ def set_platform_config(
         bool(voice_enabled) if voice_enabled is not None
         else bool(current.get("voice_enabled"))
     )
+    provider = (
+        (voice_provider or "").strip().lower() if voice_provider is not None
+        else (current.get("voice_provider") or DEFAULT_VOICE_PROVIDER)
+    )
+    if provider not in VOICE_PROVIDERS:
+        provider = DEFAULT_VOICE_PROVIDER
+    doubao_key = (doubao_api_key_encrypted if doubao_api_key_encrypted is not None
+                  else current.get("doubao_api_key_encrypted") or "")
+    doubao_appid = (
+        (doubao_app_id or "").strip() if doubao_app_id is not None
+        else (current.get("doubao_app_id") or "")
+    )
+    doubao_token = (doubao_access_token_encrypted if doubao_access_token_encrypted is not None
+                    else current.get("doubao_access_token_encrypted") or "")
+    doubao_resource = (
+        (doubao_resource_id or "").strip() if doubao_resource_id is not None
+        else (current.get("doubao_resource_id") or "")
+    )
     with _lock, connect() as conn:
         conn.execute(
             "INSERT INTO platform_config (id, api_key_encrypted, base_url, model, enabled,"
             " per_turn_cost, new_user_gift, default_credit_days, distill_credit_cost,"
             " distill_ticket_price, distill_ticket_gift, minimax_api_key_encrypted,"
-            " voice_tts_model, voice_clone_cost, voice_reply_cost, voice_enabled, updated_at)"
-            " VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " voice_tts_model, voice_clone_cost, voice_reply_cost, voice_enabled,"
+            " voice_provider, doubao_api_key_encrypted, doubao_app_id,"
+            " doubao_access_token_encrypted, doubao_resource_id, updated_at)"
+            " VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET api_key_encrypted = excluded.api_key_encrypted,"
             " base_url = excluded.base_url, model = excluded.model, enabled = excluded.enabled,"
             " per_turn_cost = excluded.per_turn_cost, new_user_gift = excluded.new_user_gift,"
@@ -4864,11 +4901,17 @@ def set_platform_config(
             " voice_clone_cost = excluded.voice_clone_cost,"
             " voice_reply_cost = excluded.voice_reply_cost,"
             " voice_enabled = excluded.voice_enabled,"
+            " voice_provider = excluded.voice_provider,"
+            " doubao_api_key_encrypted = excluded.doubao_api_key_encrypted,"
+            " doubao_app_id = excluded.doubao_app_id,"
+            " doubao_access_token_encrypted = excluded.doubao_access_token_encrypted,"
+            " doubao_resource_id = excluded.doubao_resource_id,"
             " updated_at = excluded.updated_at",
             (api_key_encrypted, base_url, model, 1 if enabled else 0,
              int(per_turn_cost), int(new_user_gift), days, credit_cost, ticket_price,
              ticket_gift, voice_key, voice_model, clone_cost, reply_cost,
-             1 if voice_on else 0, utcnow()),
+             1 if voice_on else 0, provider, doubao_key, doubao_appid, doubao_token,
+             doubao_resource, utcnow()),
         )
     return get_platform_config_row() or {}
 

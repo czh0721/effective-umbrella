@@ -20,6 +20,7 @@ from ex_persona.webapp import app  # noqa: E402
 def _configure_voice(reply_cost=20, enabled=True):
     store.set_platform_config(
         "", "https://api.deepseek.com/v1", "deepseek-chat", True, 0, 0,
+        voice_provider="minimax",
         minimax_api_key_encrypted=crypto.encrypt("mm-key") if enabled else "",
         voice_tts_model="speech-02-turbo",
         voice_clone_cost=500,

@@ -1548,9 +1548,19 @@
           <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
           <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
           <div class="field"><label>蒸馏积分单价</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
+          <div class="field"><label>语音提供商</label><select id="pfVoiceProvider">
+            <option value="minimax" ${(platform.voice_provider || "minimax") === "minimax" ? "selected" : ""}>MiniMax</option>
+            <option value="doubao" ${platform.voice_provider === "doubao" ? "selected" : ""}>豆包（火山引擎）</option>
+          </select></div>
           <div class="field full"><label>语音 MiniMax Key${platform.has_voice_key ? "（已配置 " + escapeHtml(platform.voice_key_masked || "") + "）" : ""}</label>
             <input id="pfVoiceKey" type="password" autocomplete="off" placeholder="${platform.has_voice_key ? "留空保持不变" : "填入 MiniMax API Key"}" /></div>
           <div class="field"><label>TTS 模型名</label><input id="pfVoiceModel" value="${escapeHtml(platform.voice_tts_model || "speech-02-turbo")}" /></div>
+          <div class="field full"><label>豆包 API Key${platform.has_doubao_key ? "（已配置 " + escapeHtml(platform.doubao_key_masked || "") + "，新版控制台）" : "（新版控制台，可选）"}</label>
+            <input id="pfDoubaoKey" type="password" autocomplete="off" placeholder="${platform.has_doubao_key ? "留空保持不变" : "填入豆包 API Key"}" /></div>
+          <div class="field"><label>豆包 App ID${platform.doubao_app_id ? "（已配置）" : "（旧版控制台）"}</label><input id="pfDoubaoAppId" value="${escapeHtml(platform.doubao_app_id || "")}" /></div>
+          <div class="field"><label>豆包 Access Token${platform.has_doubao_token ? "（已配置 " + escapeHtml(platform.doubao_token_masked || "") + "）" : "（旧版控制台）"}</label>
+            <input id="pfDoubaoToken" type="password" autocomplete="off" placeholder="${platform.has_doubao_token ? "留空保持不变" : "填入豆包 Access Token"}" /></div>
+          <div class="field"><label>豆包资源 ID</label><input id="pfDoubaoResource" value="${escapeHtml(platform.doubao_resource_id || "")}" placeholder="留空自动推断" /></div>
           <div class="field"><label>音色克隆成本</label><input id="pfVoiceCloneCost" type="number" min="0" value="${escapeHtml(String(platform.voice_clone_cost == null ? 500 : platform.voice_clone_cost))}" /></div>
           <div class="field"><label>语音回复成本</label><input id="pfVoiceReplyCost" type="number" min="0" value="${escapeHtml(String(platform.voice_reply_cost == null ? 20 : platform.voice_reply_cost))}" /></div>
           <div class="field"><label>语音用量</label><input value="克隆 ${escapeHtml(String((platform.voice_usage || {}).clones || 0))} 次 / 回复 ${escapeHtml(String((platform.voice_usage || {}).replies || 0))} 条" disabled /></div>
@@ -1579,7 +1589,10 @@
             new_user_gift: Number($("pfGift").value) || 0,
             default_credit_days: Number($("pfDefaultDays").value) || 30,
             distill_credit_cost: Number($("pfDistillCost").value) || 0,
+            voice_provider: $("pfVoiceProvider").value,
             voice_tts_model: $("pfVoiceModel").value.trim(),
+            doubao_app_id: $("pfDoubaoAppId").value.trim(),
+            doubao_resource_id: $("pfDoubaoResource").value.trim(),
             voice_clone_cost: Number($("pfVoiceCloneCost").value) || 0,
             voice_reply_cost: Number($("pfVoiceReplyCost").value) || 0,
             voice_enabled: $("pfVoiceEnabled").checked,
@@ -1588,6 +1601,10 @@
           if (key) payload.api_key = key;
           const voiceKey = $("pfVoiceKey").value.trim();
           if (voiceKey) payload.minimax_api_key = voiceKey;
+          const doubaoKey = $("pfDoubaoKey").value.trim();
+          if (doubaoKey) payload.doubao_api_key = doubaoKey;
+          const doubaoToken = $("pfDoubaoToken").value.trim();
+          if (doubaoToken) payload.doubao_access_token = doubaoToken;
           state.platform = await api("/api/admin/platform", { method: "PUT", body: JSON.stringify(payload) });
           toast("平台配置已保存");
           renderCreditsPanel();

@@ -88,7 +88,8 @@ class FrontendBackendContractTest(unittest.TestCase):
 class VoiceUiContractTest(unittest.TestCase):
     def test_admin_voice_settings_present(self):
         text = (WEB_ROOT / "admin.html").read_text(encoding="utf-8")
-        for marker in ("语音 MiniMax Key", "TTS 模型名", "音色克隆成本", "语音回复成本", "启用语音服务"):
+        for marker in ("语音提供商", "语音 MiniMax Key", "TTS 模型名", "豆包 App ID",
+                       "豆包 Access Token", "音色克隆成本", "语音回复成本", "启用语音服务"):
             self.assertIn(marker, text)
 
     def test_agent_voice_panel_present(self):
@@ -103,6 +104,22 @@ class VoiceUiContractTest(unittest.TestCase):
         self.assertIn("t2a_v2", source)
         self.assertIn("voice_clone", source)
         self.assertIn("SILK", source)
+
+    def test_voice_module_uses_doubao_endpoints(self):
+        source = (
+            Path(__file__).resolve().parent.parent / "ex_persona" / "voice.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("openspeech.bytedance.com", source)
+        self.assertIn("tts/unidirectional", source)
+        self.assertIn("tts/voice_clone", source)
+        self.assertIn("seed-icl-2.0", source)
+
+    def test_admin_platform_exposes_provider_switch(self):
+        source = (
+            Path(__file__).resolve().parent.parent / "ex_persona" / "webapp.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("voice_provider", source)
+        self.assertIn("doubao_access_token", source)
 
 
 if __name__ == "__main__":

@@ -1312,8 +1312,13 @@ class PlatformConfigRequest(BaseModel):
     default_credit_days: int | None = None
     distill_credit_cost: int | None = None
     distill_ticket_price: int | None = None
+    voice_provider: str | None = None
     minimax_api_key: str | None = None
     voice_tts_model: str | None = None
+    doubao_api_key: str | None = None
+    doubao_app_id: str | None = None
+    doubao_access_token: str | None = None
+    doubao_resource_id: str | None = None
     voice_clone_cost: int | None = None
     voice_reply_cost: int | None = None
     voice_enabled: bool | None = None
@@ -2464,6 +2469,7 @@ VOICE_PRESET_LABELS = {
 
 def _persona_voice_detail(user_id: int, persona: dict, contact: str = "") -> dict:
     platform = load_platform_config()
+    creds = voice.credentials(platform)
     settings = persona_settings.load(persona.get("settings"))
     voice_cfg = settings.get("voice") or {}
     selected = (contact or voice_cfg.get("clone_contact") or "").strip()
@@ -2476,7 +2482,7 @@ def _persona_voice_detail(user_id: int, persona: dict, contact: str = "") -> dic
         "preset": voice_cfg.get("preset") or voice_cfg.get("voice") or "female-1",
         "presets": [
             {"id": key, "label": VOICE_PRESET_LABELS.get(key, key)}
-            for key in voice.PRESET_VOICES
+            for key in voice.preset_table(creds.provider)
         ],
         "reply_voice": bool(settings["advanced"].get("reply_voice")),
         "clone_status": voice_cfg.get("clone_status") or "none",
@@ -2489,7 +2495,8 @@ def _persona_voice_detail(user_id: int, persona: dict, contact: str = "") -> dic
         "clone_cost": platform.voice_clone_cost,
         "reply_cost": platform.voice_reply_cost,
         "ready": platform.voice_ready,
-        "key_ready": bool(platform.minimax_api_key),
+        "provider": creds.provider,
+        "key_ready": creds.ready,
         "contacts": store.list_contacts(user_id, persona["id"]),
         "clone": clone,
         "ffmpeg_ready": voice.ffmpeg_available(),
@@ -2526,14 +2533,9 @@ def _start_voice_clone(
 
 def _voice_clone_task(user_id, persona_id, contact, sample_paths, voice_id, cost, platform) -> None:
     persona = store.get_persona(user_id, persona_id)
+    creds = voice.credentials(platform)
     try:
-        voice.minimax_clone(
-            sample_paths,
-            api_key=platform.minimax_api_key,
-            voice_id=voice_id,
-            base_url=MINIMAX_BASE_URL,
-            group_id=MINIMAX_GROUP_ID,
-        )
+        voice.clone(sample_paths, voice_id, creds)
     except Exception as error:  # noqa: BLE001 - 失败要退款并落库
         if cost > 0:
             try:
@@ -2590,15 +2592,11 @@ def _voice_reply_task(user_id: int, persona_id: int, contact: str, reply: str, p
     if persona is None:
         return
     settings = persona_settings.load(persona.get("settings"))
-    voice_id, _ = voice.active_voice_id(settings)
+    creds = voice.credentials(platform)
+    voice_id, cloned = voice.active_voice_id(settings, creds.provider)
     try:
-        audio = voice.minimax_tts(
-            reply,
-            voice_id,
-            api_key=platform.minimax_api_key,
-            base_url=MINIMAX_BASE_URL,
-            model=platform.voice_tts_model,
-            group_id=MINIMAX_GROUP_ID,
+        audio = voice.synthesize(
+            reply, voice_id, creds, model=platform.voice_tts_model, is_clone=cloned
         )
     except voice.VoiceError as error:
         observability.METRICS.inc("voice.reply_error")
@@ -2686,6 +2684,7 @@ def clone_persona_voice(
     store.upsert_voice_clone(
         user["id"], persona["id"], contact,
         status="pending", voice_id=voice_id, sample_seconds=summary["seconds"],
+        provider=platform.voice_provider,
     )
     _set_persona_voice(
         user["id"], persona,
@@ -2705,25 +2704,24 @@ def preview_persona_voice(
 ) -> Response:
     persona = _require_persona(user["id"], persona_id)
     platform = load_platform_config()
-    if not platform.minimax_api_key:
+    creds = voice.credentials(platform)
+    if not creds.ready:
         raise HTTPException(status_code=400, detail="平台未配置语音服务")
     settings = persona_settings.load(persona.get("settings"))
     requested = (payload.voice_id or "").strip()
     clone_id = str(settings["voice"].get("clone_voice_id") or "")
-    allowed = set(voice.PRESET_VOICES.values())
+    allowed = voice.preset_voice_ids(creds.provider)
     if clone_id and settings["voice"].get("clone_status") == "ready":
         allowed.add(clone_id)
     if requested and requested in allowed:
         voice_id = requested
+        is_clone = bool(clone_id) and requested == clone_id
     else:
-        voice_id, _ = voice.active_voice_id(settings)
+        voice_id, is_clone = voice.active_voice_id(settings, creds.provider)
     try:
-        audio = voice.minimax_tts(
-            VOICE_PREVIEW_TEXT, voice_id,
-            api_key=platform.minimax_api_key,
-            base_url=MINIMAX_BASE_URL,
-            model=platform.voice_tts_model,
-            group_id=MINIMAX_GROUP_ID,
+        audio = voice.synthesize(
+            VOICE_PREVIEW_TEXT, voice_id, creds,
+            model=platform.voice_tts_model, is_clone=is_clone,
         )
     except voice.VoiceError as error:
         status = 400 if error.auth else 502
@@ -5068,11 +5066,20 @@ def admin_get_platform(admin: dict = Depends(current_admin)) -> dict:
         "api_key_masked": crypto.mask(platform.api_key) if platform.api_key else "",
         "daily_limit": platform.daily_limit,
         "voice_enabled": platform.voice_enabled,
+        "voice_provider": platform.voice_provider,
         "voice_tts_model": platform.voice_tts_model,
         "voice_clone_cost": platform.voice_clone_cost,
         "voice_reply_cost": platform.voice_reply_cost,
         "has_voice_key": bool(row.get("minimax_api_key_encrypted")),
         "voice_key_masked": crypto.mask(platform.minimax_api_key) if platform.minimax_api_key else "",
+        "doubao_app_id": platform.doubao_app_id,
+        "doubao_resource_id": platform.doubao_resource_id,
+        "has_doubao_key": bool(row.get("doubao_api_key_encrypted")),
+        "doubao_key_masked": crypto.mask(platform.doubao_api_key) if platform.doubao_api_key else "",
+        "has_doubao_token": bool(row.get("doubao_access_token_encrypted")),
+        "doubao_token_masked": (
+            crypto.mask(platform.doubao_access_token) if platform.doubao_access_token else ""
+        ),
         "voice_ready": platform.voice_ready,
         "voice_usage": {
             "clones": store.count_voice_clones(status=""),
@@ -5122,11 +5129,24 @@ def admin_set_platform(
         distill_ticket_price=distill_ticket_price,
         # 「注册赠送蒸馏次数」已并入 new_user_gift，这里固定归零以保持退役状态。
         distill_ticket_gift=0,
+        voice_provider=payload.voice_provider,
         minimax_api_key_encrypted=(
             crypto.encrypt(payload.minimax_api_key.strip())
             if payload.minimax_api_key is not None and payload.minimax_api_key.strip()
             else None
         ),
+        doubao_api_key_encrypted=(
+            crypto.encrypt(payload.doubao_api_key.strip())
+            if payload.doubao_api_key is not None and payload.doubao_api_key.strip()
+            else None
+        ),
+        doubao_app_id=payload.doubao_app_id,
+        doubao_access_token_encrypted=(
+            crypto.encrypt(payload.doubao_access_token.strip())
+            if payload.doubao_access_token is not None and payload.doubao_access_token.strip()
+            else None
+        ),
+        doubao_resource_id=payload.doubao_resource_id,
         voice_tts_model=payload.voice_tts_model,
         voice_clone_cost=(
             max(int(payload.voice_clone_cost), 0)
@@ -5143,7 +5163,8 @@ def admin_set_platform(
         admin, "platform.update",
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
                 f" days={default_credit_days} distill={distill_credit_cost}"
-                f" voice_enabled={payload.voice_enabled}"),
+                f" voice_enabled={payload.voice_enabled}"
+                f" voice_provider={payload.voice_provider}"),
     )
     return admin_get_platform(admin)
 
