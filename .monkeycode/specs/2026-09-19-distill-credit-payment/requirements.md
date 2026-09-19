@@ -2,7 +2,7 @@
 
 - Feature: `distill-credit-payment`
 - 日期: 2026-09-19
-- 状态: 待实现
+- 状态: 已实现并部署（生产迁移已核对）
 - 关联: 替换 `2026-09-17-credit-expiry-distill` 中的蒸馏券机制；扩展 `2026-09-18-package-tiers-bonus`
 
 ## 背景
