@@ -2401,6 +2401,9 @@ async def wechat_voice(bridge_token: str, request: Request) -> dict:
     persona = persona or store.get_active_persona(user_id)
     if persona is None:
         raise HTTPException(status_code=400, detail="该用户尚未创建人格")
+    settings = persona_settings.load(persona.get("settings"))
+    if not settings["voice"].get("collect", True):
+        return {"ok": True, "skipped": True, "reason": "collect_disabled"}
 
     form = await request.form()
     upload = form.get("file")
@@ -2493,6 +2496,7 @@ def _persona_voice_detail(user_id: int, persona: dict, contact: str = "") -> dic
         "sample_count": summary["count"],
         "sample_seconds": summary["seconds"],
         "min_seconds": VOICE_CLONE_MIN_SECONDS,
+        "collect": bool(voice_cfg.get("collect", True)),
         "clone_cost": platform.voice_clone_cost,
         "reply_cost": platform.voice_reply_cost,
         "ready": platform.voice_ready,

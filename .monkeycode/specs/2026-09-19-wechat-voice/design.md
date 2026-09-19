@@ -196,6 +196,15 @@ CREATE TABLE IF NOT EXISTS voice_clones (
 - 前端：`web/agent.html` `openVoice()` 增加「上传本地音频」按钮与隐藏多选 `input[accept=audio/*]`，逐条 `FormData` 上传，成功后刷新面板；`api()` 已对 `FormData` 跳过 JSON Content-Type。
 - 测试：`tests/test_voice_samples.py::VoiceUploadApiTest` 覆盖成功、缺联系人、非音频、超大、超长、不可解码；契约测试覆盖前端标记与端点存在。
 
+## 增量：语音收集开关与进度
+
+自动收集可能长期累积样本，用户需要可控开关与可见进度。
+
+- 设置：`persona_settings.voice.collect`（默认 `true`，`validate()` 归一为布尔），随 `PUT /api/personas/{id}/settings` 保存。
+- 入站：`POST /api/wechat/voice/{bridge_token}` 在解析人格后读取 `voice.collect`，关闭时直接返回 `{"ok":true,"skipped":true,"reason":"collect_disabled"}`，不落盘、不写库。
+- 详情：`_persona_voice_detail` 返回 `collect`，前端据此渲染开关。
+- 前端：`openVoice()` 新增「语音收集」分组：自动收集开关 + 收集进度条（`sample_seconds/min_seconds` 百分比）+ 结果文案（已收集条数/秒数、是否足够、还差几秒、暂停提示）；开关切换即时更新结果文案。克隆 `pending` 时每 5 秒轮询 `/voice`，状态变化后自动刷新面板，实现克隆进度与结果回显。
+
 ## References
 
 [^1]: (handler.go#L734) - [weclaw 语音转写 extractVoiceText](../../../scripts/weclaw/nian.patch)

@@ -63,6 +63,7 @@ DEFAULT_SETTINGS: dict = {
         "clone_voice_id": "",
         "clone_status": "none",
         "clone_contact": "",
+        "collect": True,
     },
     "model": {
         "provider": "system",
@@ -233,6 +234,7 @@ def validate(settings: dict) -> dict:
     voice["clone_contact"] = str(voice.get("clone_contact") or "")[:200]
     voice["asr"] = bool(voice.get("asr", False))
     voice["tts"] = bool(voice.get("tts", False))
+    voice["collect"] = bool(voice.get("collect", True))
 
     tuning = settings.setdefault("tuning", {})
     tuning["verbosity"] = _int_range(tuning.get("verbosity"), 50, 0, 100)

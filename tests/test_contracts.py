@@ -95,7 +95,7 @@ class VoiceUiContractTest(unittest.TestCase):
     def test_agent_voice_panel_present(self):
         text = (WEB_ROOT / "agent.html").read_text(encoding="utf-8")
         for marker in ("克隆音色", "试听", "同意", "预设音色", "playVoicePreview",
-                       "上传本地音频", "voice/samples"):
+                       "上传本地音频", "voice/samples", "自动收集微信语音", "收集进度"):
             self.assertIn(marker, text)
 
     def test_voice_module_uses_minimax_endpoints(self):

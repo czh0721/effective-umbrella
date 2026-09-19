@@ -122,6 +122,32 @@ class VoiceSampleApiTest(unittest.TestCase):
             response = self._post(client, token, data=WAV_BYTES, name="v.wav")
             self.assertEqual(response.status_code, 200, response.text)
 
+    def test_collect_disabled_skips_sample(self):
+        with TestClient(app) as client:
+            user, persona, token = self._prepare(client)
+            saved = client.put(
+                f"/api/personas/{persona['id']}/settings",
+                json={"settings": {"voice": {"collect": False}}},
+            )
+            self.assertEqual(saved.status_code, 200, saved.text)
+            response = self._post(client, token)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json().get("skipped"))
+            self.assertEqual(response.json().get("reason"), "collect_disabled")
+            self.assertEqual(store.list_voice_samples(user["id"], persona["id"], "contact-1"), [])
+
+    def test_voice_detail_exposes_collect(self):
+        with TestClient(app) as client:
+            _, persona, _ = self._prepare(client)
+            detail = client.get(f"/api/personas/{persona['id']}/voice").json()
+            self.assertTrue(detail["collect"])
+            client.put(
+                f"/api/personas/{persona['id']}/settings",
+                json={"settings": {"voice": {"collect": False}}},
+            )
+            detail = client.get(f"/api/personas/{persona['id']}/voice").json()
+            self.assertFalse(detail["collect"])
+
 
 @unittest.skipUnless(voice.ffmpeg_available(), "ffmpeg 不可用")
 class VoiceUploadApiTest(unittest.TestCase):
@@ -228,9 +254,13 @@ class VoiceConfigTest(unittest.TestCase):
         voice = settings["voice"]
         self.assertEqual(voice["preset"], "female-1")
         self.assertEqual(voice["clone_status"], "none")
+        self.assertTrue(voice["collect"])
         merged = persona_settings.validate({"voice": {"preset": "bogus", "clone_status": "weird"}})
         self.assertEqual(merged["voice"]["preset"], "female-1")
         self.assertEqual(merged["voice"]["clone_status"], "none")
+        self.assertTrue(merged["voice"]["collect"])
+        off = persona_settings.validate({"voice": {"collect": False}})
+        self.assertFalse(off["voice"]["collect"])
 
 
 if __name__ == "__main__":

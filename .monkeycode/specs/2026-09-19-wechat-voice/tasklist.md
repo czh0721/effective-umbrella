@@ -87,6 +87,13 @@
 - [x] `web/agent.html` `openVoice()`：新增「上传本地音频」按钮与多选文件输入，逐条上传并刷新面板。
 - [x] `tests/test_voice_samples.py` 上传用例；`tests/test_contracts.py` 前端标记与端点契约。
 
+## T13 语音收集开关与进度
+
+- [x] `persona_settings.py`：`voice.collect` 默认 `true` + `validate()` 归一。
+- [x] `webapp.py`：入站语音在 `collect=false` 时跳过并返回 `skipped`；`_persona_voice_detail` 返回 `collect`。
+- [x] `web/agent.html`：「语音收集」分组（开关 + 进度条 + 结果文案）；克隆 `pending` 轮询刷新。
+- [x] `tests/test_voice_samples.py` 跳过收集与详情字段用例；`tests/test_contracts.py` 前端标记。
+
 ## 验证记录
 
 - 真实样本：iLink 下发编码为 `#!SILK_V3`（两条 5.83s + 6.49s）；在服务器编译 `kn007/silk-v3-decoder` 解码器并装到 `/opt/nian/bin/silk_v3_decoder`，`SILK_DECODER_BIN` 写入 `/opt/nian/.env`。
@@ -96,3 +103,4 @@
 - 待管理员在后台「语音设置」填入 MiniMax Key 并开启后，出站语音与克隆才会生效。
 - 多提供商增量：`ruff check ex_persona tests` 全过；`unittest discover` 504 全过；`scripts/e2e/run_chain.py` 129/129。豆包接口按官方 V3 文档实现，需管理员填入豆包 App ID + Access Token（或 API Key）后做一次真实联调验证。
 - 用户上传音频增量：`ruff check ex_persona tests` 全过；`unittest discover` 511 全过；`scripts/e2e/run_chain.py` 129/129。
+- 收集开关与进度增量：`ruff check ex_persona tests` 全过；`unittest discover` 513 全过；`scripts/e2e/run_chain.py` 129/129。
