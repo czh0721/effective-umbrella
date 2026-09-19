@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import shutil
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -2727,6 +2728,70 @@ def preview_persona_voice(
         status = 400 if error.auth else 502
         raise HTTPException(status_code=status, detail=f"试听失败：{error}") from error
     return Response(content=audio, media_type="audio/mpeg")
+
+
+@app.post("/api/personas/{persona_id}/voice/samples")
+async def upload_persona_voice_sample(
+    persona_id: int, request: Request, user: dict = Depends(current_user)
+) -> dict:
+    """用户手动上传本地音频，作为音色克隆的样本。"""
+    persona = _require_persona(user["id"], persona_id)
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="缺少音频文件")
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    if len(data) > VOICE_SAMPLE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="音频文件过大，单条不超过 5MB")
+    ext = _sniff_audio_ext(data)
+    if not ext:
+        raise HTTPException(status_code=400, detail="只支持音频文件（mp3/wav/m4a/amr 等）")
+    if not voice.ffmpeg_available():
+        raise HTTPException(status_code=400, detail="服务器缺少音频处理组件，暂时无法识别音频")
+
+    settings = persona_settings.load(persona.get("settings"))
+    contact = str(form.get("contact") or settings["voice"].get("clone_contact") or "").strip()
+    if not contact:
+        raise HTTPException(status_code=400, detail="请先选择要克隆的联系人")
+
+    duration_ms = 0
+    with tempfile.TemporaryDirectory() as tmpdir:
+        source = Path(tmpdir) / f"upload{ext}"
+        source.write_bytes(data)
+        duration_ms = int(round(voice.probe_duration_seconds(source) * 1000))
+        if duration_ms <= 0:
+            try:
+                probe = Path(tmpdir) / "probe.wav"
+                voice.build_clone_audio([str(source)], probe)
+                duration_ms = int(round(voice.probe_duration_seconds(probe) * 1000))
+            except voice.VoiceError:
+                duration_ms = 0
+        if duration_ms > VOICE_SAMPLE_MAX_MS:
+            raise HTTPException(status_code=413, detail="单条语音过长，请控制在 120 秒内")
+        if duration_ms <= 0:
+            raise HTTPException(status_code=400, detail="无法识别该音频，请上传常见格式（mp3/wav/m4a/amr 等）")
+        directory = Path(persona["dir"]) / "voices" / _safe_contact(contact)
+        directory.mkdir(parents=True, exist_ok=True)
+        message_id = f"upload-{uuid.uuid4().hex}"
+        target = workspace.safe_join(directory, f"{_safe_contact(message_id)}{ext}")
+        shutil.copyfile(source, target)
+
+    sample = store.add_voice_sample(
+        user["id"], persona["id"], contact, str(target), len(data), duration_ms, message_id
+    )
+    store.update_persona(user["id"], persona["id"], last_contact=contact)
+    store.touch_contact(user["id"], persona["id"], contact)
+    summary = store.voice_sample_summary(user["id"], persona["id"], contact)
+    observability.METRICS.inc("voice.sample_upload")
+    return {
+        "ok": True,
+        "sample": sample,
+        "contact": contact,
+        "sample_count": summary["count"],
+        "sample_seconds": summary["seconds"],
+    }
 
 
 # --------------------------------------------------------------------------- #

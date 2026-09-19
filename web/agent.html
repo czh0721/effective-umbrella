@@ -1130,10 +1130,13 @@
         <label class="desc" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0">
           <input type="checkbox" id="vConsent" />
           <span>我已获得该声音权利人的同意，仅用于本人对话</span></label>
+        <input type="file" id="vFile" accept="audio/*" multiple hidden />
         <div class="btnrow">
+          <button class="btn ghost" id="vUpload">上传本地音频</button>
           <button class="btn ghost" id="vPreview">试听</button>
           <button class="btn" id="vClone">克隆音色（${cost} 积分）</button>
         </div>
+        <div class="desc">可上传本地音频（mp3/wav/m4a/amr 等），单条不超过 5MB、120 秒；上传前请先选择克隆对象。</div>
         <div class="btnrow"><button class="btn primary wide" id="vSave">保存</button></div>`,
         (body, mask) => {
           body.querySelector("#vSave").onclick = async () => {
@@ -1143,6 +1146,31 @@
               advanced: { reply_voice: body.querySelector("#vReply").checked },
             });
             closeModal(mask);
+          };
+          const fileInput = body.querySelector("#vFile");
+          const uploadButton = body.querySelector("#vUpload");
+          uploadButton.onclick = () => fileInput.click();
+          fileInput.onchange = async () => {
+            const files = Array.from(fileInput.files || []);
+            if (!files.length) return;
+            const selected = body.querySelector("#vContact").value;
+            if (!selected) { toast("请先选择要克隆的联系人"); fileInput.value = ""; return; }
+            uploadButton.disabled = true;
+            let done = 0;
+            let failed = 0;
+            try {
+              for (const file of files) {
+                const form = new FormData();
+                form.append("file", file, file.name || "audio");
+                form.append("contact", selected);
+                try {
+                  await api(`/api/personas/${personaId}/voice/samples`, { method: "POST", body: form });
+                  done += 1;
+                } catch (error) { failed += 1; toastErr(error); }
+              }
+              if (done) toast(`已上传 ${done} 条语音样本${failed ? `，${failed} 条失败` : ""}`);
+              if (done) { closeModal(mask); openVoice(); }
+            } finally { uploadButton.disabled = false; }
           };
           body.querySelector("#vPreview").onclick = async () => {
             const button = body.querySelector("#vPreview");

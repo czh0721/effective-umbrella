@@ -94,7 +94,8 @@ class VoiceUiContractTest(unittest.TestCase):
 
     def test_agent_voice_panel_present(self):
         text = (WEB_ROOT / "agent.html").read_text(encoding="utf-8")
-        for marker in ("克隆音色", "试听", "同意", "预设音色", "playVoicePreview"):
+        for marker in ("克隆音色", "试听", "同意", "预设音色", "playVoicePreview",
+                       "上传本地音频", "voice/samples"):
             self.assertIn(marker, text)
 
     def test_voice_module_uses_minimax_endpoints(self):
@@ -120,6 +121,13 @@ class VoiceUiContractTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("voice_provider", source)
         self.assertIn("doubao_access_token", source)
+
+    def test_voice_sample_upload_endpoint_present(self):
+        source = (
+            Path(__file__).resolve().parent.parent / "ex_persona" / "webapp.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/api/personas/{persona_id}/voice/samples", source)
+        self.assertIn("sample_upload", source)
 
 
 if __name__ == "__main__":

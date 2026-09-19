@@ -1,7 +1,10 @@
 import os
+import subprocess
 import tempfile
 import unittest
 import uuid
+from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.TemporaryDirectory()
 os.environ["PERSONA_DATA_DIR"] = _TMP.name
@@ -11,11 +14,22 @@ os.environ.setdefault("PERSONA_REGISTER_MAX", "1000")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from ex_persona import store, workspace  # noqa: E402
+from ex_persona import store, voice, workspace  # noqa: E402
 from ex_persona.webapp import app  # noqa: E402
 
 MP3_BYTES = b"ID3\x03\x00\x00\x00" + b"\x00" * 128
 WAV_BYTES = b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 64
+
+
+def _make_wav(path: Path, seconds: float) -> None:
+    subprocess.run(
+        [
+            voice.FFMPEG, "-y", "-v", "error",
+            "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}",
+            "-ac", "1", "-ar", "24000", str(path),
+        ],
+        check=True,
+    )
 
 
 class VoiceSampleApiTest(unittest.TestCase):
@@ -107,6 +121,90 @@ class VoiceSampleApiTest(unittest.TestCase):
             _, _, token = self._prepare(client)
             response = self._post(client, token, data=WAV_BYTES, name="v.wav")
             self.assertEqual(response.status_code, 200, response.text)
+
+
+@unittest.skipUnless(voice.ffmpeg_available(), "ffmpeg 不可用")
+class VoiceUploadApiTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls._tmp.name)
+        cls.sample = cls.root / "sample.wav"
+        _make_wav(cls.sample, 3.0)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        store.init_db()
+
+    def _prepare(self, client):
+        user = self._register(client, f"upload-{uuid.uuid4().hex[:8]}")
+        persona = client.post("/api/personas", json={"name": "小念"}).json()["persona"]
+        return user, persona
+
+    def _register(self, client, username):
+        response = client.post(
+            "/api/auth/register", json={"username": username, "password": "Password123!"}
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["user"]
+
+    def _upload(self, client, persona, contact="contact-1", data=None, name="sample.wav"):
+        if data is None:
+            data = self.sample.read_bytes()
+        return client.post(
+            f"/api/personas/{persona['id']}/voice/samples",
+            files={"file": (name, data, "audio/wav")},
+            data={"contact": contact} if contact is not None else {},
+        )
+
+    def test_uploads_sample(self):
+        with TestClient(app) as client:
+            user, persona = self._prepare(client)
+            response = self._upload(client, persona)
+            self.assertEqual(response.status_code, 200, response.text)
+            payload = response.json()
+            self.assertEqual(payload["sample_count"], 1)
+            self.assertGreater(payload["sample_seconds"], 2)
+            samples = store.list_voice_samples(user["id"], persona["id"], "contact-1")
+            self.assertEqual(len(samples), 1)
+            self.assertTrue(samples[0]["path"].endswith(".wav"))
+            self.assertTrue(os.path.exists(samples[0]["path"]))
+            self.assertTrue(samples[0]["source_message_id"].startswith("upload-"))
+
+    def test_requires_contact(self):
+        with TestClient(app) as client:
+            _, persona = self._prepare(client)
+            response = self._upload(client, persona, contact=None)
+            self.assertEqual(response.status_code, 400, response.text)
+
+    def test_rejects_non_audio(self):
+        with TestClient(app) as client:
+            _, persona = self._prepare(client)
+            response = self._upload(client, persona, data=b"<html>nope</html>", name="a.mp3")
+            self.assertEqual(response.status_code, 400, response.text)
+
+    def test_rejects_oversized(self):
+        with TestClient(app) as client:
+            _, persona = self._prepare(client)
+            big = b"ID3" + b"\x00" * (5 * 1024 * 1024 + 10)
+            response = self._upload(client, persona, data=big, name="a.mp3")
+            self.assertEqual(response.status_code, 413, response.text)
+
+    def test_rejects_too_long(self):
+        with TestClient(app) as client:
+            _, persona = self._prepare(client)
+            with mock.patch.object(voice, "probe_duration_seconds", return_value=130.0):
+                response = self._upload(client, persona)
+            self.assertEqual(response.status_code, 413, response.text)
+
+    def test_rejects_undecodable_audio(self):
+        with TestClient(app) as client:
+            _, persona = self._prepare(client)
+            response = self._upload(client, persona, data=WAV_BYTES, name="bad.wav")
+            self.assertEqual(response.status_code, 400, response.text)
 
 
 class VoiceConfigTest(unittest.TestCase):

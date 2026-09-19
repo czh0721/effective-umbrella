@@ -80,6 +80,12 @@
 - [x] `admin.html`：新增「语音提供商」下拉与豆包 API Key / App ID / Access Token / 资源 ID 字段。
 - [x] `tests/test_voice.py` 豆包用例；`tests/test_voice_clone.py` 提供商切换与就绪判定；`tests/test_contracts.py` 豆包端点与后台字段契约。
 
+## T12 用户上传音频样本
+
+- [x] `webapp.py`：`POST /api/personas/{persona_id}/voice/samples`，校验大小/格式/时长，临时目录探测后落盘，复用 `add_voice_sample` 与样本上限。
+- [x] `web/agent.html` `openVoice()`：新增「上传本地音频」按钮与多选文件输入，逐条上传并刷新面板。
+- [x] `tests/test_voice_samples.py` 上传用例；`tests/test_contracts.py` 前端标记与端点契约。
+
 ## 验证记录
 
 - 真实样本：iLink 下发编码为 `#!SILK_V3`（两条 5.83s + 6.49s）；在服务器编译 `kn007/silk-v3-decoder` 解码器并装到 `/opt/nian/bin/silk_v3_decoder`，`SILK_DECODER_BIN` 写入 `/opt/nian/.env`。
@@ -88,3 +94,4 @@
 - 生产：新 weclaw 二进制装 `/opt/nian/bin/weclaw`（备份 `weclaw.bak.20260919_041433`），部署 `20260919_042641`（T1 数据层）、`20260919_044538`（语音全量）；DB 含 `voice_samples`/`voice_clones` 与语音配置列。
 - 待管理员在后台「语音设置」填入 MiniMax Key 并开启后，出站语音与克隆才会生效。
 - 多提供商增量：`ruff check ex_persona tests` 全过；`unittest discover` 504 全过；`scripts/e2e/run_chain.py` 129/129。豆包接口按官方 V3 文档实现，需管理员填入豆包 App ID + Access Token（或 API Key）后做一次真实联调验证。
+- 用户上传音频增量：`ruff check ex_persona tests` 全过；`unittest discover` 511 全过；`scripts/e2e/run_chain.py` 129/129。

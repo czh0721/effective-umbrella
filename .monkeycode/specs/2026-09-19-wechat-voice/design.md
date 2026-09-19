@@ -186,6 +186,16 @@ CREATE TABLE IF NOT EXISTS voice_clones (
 - 就绪判定：`PlatformConfig.voice_credentials_ready` 按当前提供商判断；`voice_ready = 就绪 && voice_enabled`。豆包凭据缺失不会误判为已就绪。
 - 后台：`/api/admin/platform` 增 `voice_provider`、`doubao_app_id`、`doubao_resource_id` 与豆包密钥的 `has_*`/脱敏字段；`admin.html` 增提供商下拉与豆包字段。密钥仍仅存密文、不回显。
 
+## 增量：用户上传音频样本
+
+除被动接收微信语音外，用户可主动上传本地音频作为克隆样本。
+
+- 接口：`POST /api/personas/{persona_id}/voice/samples`（登录态 + `_require_persona` 鉴权），multipart 字段 `file` 与 `contact`（缺省回退到 `voice.clone_contact`）。
+- 校验：空文件 400；超过 `VOICE_SAMPLE_MAX_BYTES`(5MB) 413；文件头无法识别为音频 400；用临时目录探测时长，无法解码时再尝试 `build_clone_audio` 转 wav 复探，仍失败 400；超过 `VOICE_SAMPLE_MAX_MS`(120s) 413。只有全部校验通过才落入 `{persona_dir}/voices/{contact}/upload-<hex><ext>` 并写库，避免残留孤儿文件。
+- 复用：`_sniff_audio_ext`、`store.add_voice_sample`（含每联系人 20 条上限）、`store.voice_sample_summary`、`observability.METRICS.inc("voice.sample_upload")`。
+- 前端：`web/agent.html` `openVoice()` 增加「上传本地音频」按钮与隐藏多选 `input[accept=audio/*]`，逐条 `FormData` 上传，成功后刷新面板；`api()` 已对 `FormData` 跳过 JSON Content-Type。
+- 测试：`tests/test_voice_samples.py::VoiceUploadApiTest` 覆盖成功、缺联系人、非音频、超大、超长、不可解码；契约测试覆盖前端标记与端点存在。
+
 ## References
 
 [^1]: (handler.go#L734) - [weclaw 语音转写 extractVoiceText](../../../scripts/weclaw/nian.patch)
