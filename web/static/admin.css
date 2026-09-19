@@ -88,6 +88,10 @@
 }
 .admin-title { min-width: 0; flex: 1 1 auto; }
 .admin-title h1 { font-size: clamp(19px, 1.9vw, 23px); letter-spacing: -0.03em; }
+.admin-title .admin-desc {
+  margin: 3px 0 0; color: var(--text-2); font-size: 12.5px; line-height: 1.45;
+  max-width: 62ch;
+}
 .admin-title .sub {
   color: var(--text-2); font-size: 12.5px; margin-top: 3px;
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;

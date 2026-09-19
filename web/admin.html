@@ -15,24 +15,24 @@
     <aside class="admin-side">
       <div class="admin-brand">
         <div class="mark">念</div>
-        <div class="word"><b>念念</b><small>Console</small></div>
+        <div class="word"><b>念念</b><small>管理后台</small></div>
         <button class="side-close" id="sideClose" aria-label="关闭导航"></button>
       </div>
       <nav class="admin-nav" id="sideNav">
-        <div class="label">运营</div>
+        <div class="label">概览</div>
         <button data-tab="overview" class="active"></button>
-        <button data-tab="reports"></button>
+        <div class="label">用户运营</div>
         <button data-tab="users"></button>
         <button data-tab="content"></button>
-        <button data-tab="orders"></button>
-        <div class="label">运营投放</div>
+        <button data-tab="reports"></button>
         <button data-tab="ops"></button>
-        <div class="label">配置</div>
+        <div class="label">商业化</div>
+        <button data-tab="orders"></button>
         <button data-tab="credits"></button>
-        <div class="label">运维</div>
-        <button data-tab="audit"></button>
+        <div class="label">系统运维</div>
         <button data-tab="system"></button>
-        <div class="label">权限</div>
+        <button data-tab="audit"></button>
+        <div class="label">权限管理</div>
         <button data-tab="admins"></button>
       </nav>
       <div class="side-foot">
@@ -50,6 +50,7 @@
           <button class="nav-toggle" id="navToggle" aria-label="打开导航" aria-expanded="false" aria-controls="sideNav"></button>
           <div class="admin-title">
             <h1 id="pageTitle">概览</h1>
+            <p class="admin-desc" id="pageDesc">平台关键指标、趋势、告警与待办一屏速览</p>
             <div class="sub"><span class="live-dot"></span><span id="adminLine">正在同步数据…</span></div>
           </div>
           <div class="actions">
@@ -327,6 +328,7 @@
   <script src="/static/app.js"></script>
   <script>
     const CATEGORY = { abuse: "违法或滥用", bug: "功能异常", privacy: "隐私问题", other: "其他" };
+    const LOG_LEVEL_LABEL = { INFO: "信息", WARNING: "警告", ERROR: "错误", CRITICAL: "严重" };
     const ACTION_LABEL = {
       "report.resolve": "处理举报", "user.reset_password": "重置密码",
       "platform.update": "更新平台模型", "user.grant_credits": "调整积分", "package.save": "保存套餐",
@@ -356,16 +358,16 @@
       "admin.reset_totp": "shield",
     };
     const TABS = [
-      { key: "overview", label: "概览", icon: "spark", title: "运营概览" },
-      { key: "reports", label: "举报", icon: "warning", title: "举报处理" },
-      { key: "users", label: "用户", icon: "user", title: "用户管理" },
-      { key: "content", label: "内容", icon: "moments", title: "内容审核" },
-      { key: "orders", label: "订单", icon: "store", title: "购买订单" },
-      { key: "ops", label: "运营投放", icon: "send", title: "公告与通知" },
-      { key: "credits", label: "模型与计费", icon: "cpu", title: "模型与计费" },
-      { key: "audit", label: "审计", icon: "clock", title: "操作审计" },
-      { key: "system", label: "系统", icon: "sliders", title: "系统状态" },
-      { key: "admins", label: "管理员", icon: "shield", title: "管理员与权限" },
+      { key: "overview", label: "概览", icon: "spark", title: "运营概览", desc: "平台关键指标、趋势、告警与待办一屏速览" },
+      { key: "users", label: "用户", icon: "user", title: "用户管理", desc: "检索用户、调整积分与念念币、重置密码与启用停用账号" },
+      { key: "content", label: "内容", icon: "moments", title: "内容审核", desc: "查看用户人格与朋友圈内容，处理违规或异常内容" },
+      { key: "reports", label: "举报", icon: "warning", title: "举报处理", desc: "处理用户提交的举报与找回密码申请" },
+      { key: "ops", label: "运营投放", icon: "send", title: "公告与通知", desc: "发布公告、推送站内通知并查看触达效果" },
+      { key: "orders", label: "订单", icon: "store", title: "购买订单", desc: "查看套餐购买订单与营收趋势" },
+      { key: "credits", label: "模型与计费", icon: "cpu", title: "模型与计费", desc: "配置平台模型与语音服务，管理积分套餐、兑换码与念念币" },
+      { key: "system", label: "系统", icon: "sliders", title: "系统状态", desc: "服务健康、功能开关、微信绑定、任务队列与应用日志" },
+      { key: "audit", label: "审计", icon: "clock", title: "操作审计", desc: "记录管理员的关键操作，支持按类型筛选与导出" },
+      { key: "admins", label: "管理员", icon: "shield", title: "管理员与权限", desc: "管理后台账号、账号安全与登录锁定" },
     ];
     const TONE = {
       v: { color: "#7c5cff", soft: "linear-gradient(135deg,rgba(124,92,255,.16),rgba(155,123,255,.10))" },
@@ -553,6 +555,7 @@
       document.querySelectorAll("#sideNav button").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
       document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("on", panel.id === "panel-" + name));
       $("pageTitle").textContent = meta.title;
+      $("pageDesc").textContent = meta.desc || "";
       closeNav();
       revealInit();
       if (name === "system" && !state.logItems.length) loadLogs();
@@ -1377,13 +1380,31 @@
     }
 
     /* ------------------------------------------------------------- system extras */
+    const BINDING_PHASE = { running: "运行中", idle: "空闲", "logged-in": "已登录", logged_out: "未登录", stopped: "已停止", error: "异常" };
+    const TASK_STATUS = {
+      pending: "等待中", queued: "排队中", running: "运行中",
+      done: "已完成", success: "已完成", finished: "已完成",
+      error: "异常", failed: "失败", interrupted: "已中断",
+    };
+    const TASK_KIND = {
+      voice_clone: "音色克隆", voice_reply: "语音回复", voice: "语音处理",
+      moment: "朋友圈发布", moment_comment: "朋友圈回应", moments: "朋友圈",
+      distill: "人格蒸馏", outbox: "消息发送", wechat: "微信消息", chat: "对话回复",
+    };
+
     function renderSystemExtras() {
-      const labels = { moments_auto: "朋友圈自动发布", wechat_login: "微信登录", platform_model: "平台模型", admin_force_totp: "管理员强制双因素" };
+      const labels = {
+        moments_auto: ["朋友圈自动发布", "允许分身按计划自动发布朋友圈"],
+        wechat_login: ["微信登录", "允许用户扫码绑定微信收发消息"],
+        platform_model: ["平台模型", "平台统一提供模型调用能力"],
+        admin_force_totp: ["管理员强制双因素", "开启后未绑定双因素的管理员无法使用后台"],
+      };
       $("flagHead").innerHTML = headIcon("sliders", "功能开关");
       $("flagList").innerHTML = Object.keys(labels).map((key) => {
         const on = !!(state.flags || {})[key];
+        const [name, desc] = labels[key];
         return `<div class="toggle-row" style="align-items:center;justify-content:space-between;padding:10px 0">
-          <div><b>${escapeHtml(labels[key])}</b><div class="mini">${escapeHtml(key)}</div></div>
+          <div><b>${escapeHtml(name)}</b><div class="mini">${escapeHtml(desc)}</div></div>
           <button class="btn small ${on ? "primary" : "ghost"}" data-flag="${escapeHtml(key)}" data-current="${on ? 1 : 0}">${on ? "已开启" : "已关闭"}</button>
         </div>`;
       }).join("");
@@ -1393,7 +1414,7 @@
         <div class="feed-item">
           <div class="feed-dot">${icon("wechat")}</div>
           <div class="feed-body">
-            <div class="feed-title">${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${item.phase === "running" ? "resolved" : "plain"}">${escapeHtml(item.phase || "idle")}</span></div>
+            <div class="feed-title">${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${item.phase === "running" ? "resolved" : "plain"}">${escapeHtml(BINDING_PHASE[item.phase] || item.phase || "空闲")}</span></div>
             <div class="feed-sub">人格：${escapeHtml(item.persona_name || "未绑定")}</div>
             <div class="feed-time">${fmtTime(item.updated_at)}</div>
           </div>
@@ -1418,7 +1439,7 @@
         return `<div class="feed-item">
           <div class="feed-dot" style="background:${bad ? TONE.red.soft : TONE.v.soft};color:${bad ? TONE.red.color : TONE.v.color}">${icon("refresh")}</div>
           <div class="feed-body">
-            <div class="feed-title">${escapeHtml(item.kind || "任务")} · ${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${bad ? "open" : "plain"}">${escapeHtml(item.status || "")}</span></div>
+            <div class="feed-title">${escapeHtml(TASK_KIND[item.kind] || item.kind || "任务")} · ${escapeHtml(item.username || ("用户 #" + item.user_id))} <span class="tag ${bad ? "open" : "plain"}">${escapeHtml(TASK_STATUS[item.status] || item.status || "未知")}</span></div>
             <div class="feed-sub">${escapeHtml(item.error || item.message || "")}</div>
             <div class="feed-time">${fmtTime(item.created_at)}</div>
           </div>
@@ -1436,7 +1457,7 @@
         '<select class="select small" id="logLevel">' +
         `<option value=""${state.logLevel === "" ? " selected" : ""}>全部级别</option>` +
         ["INFO", "WARNING", "ERROR", "CRITICAL"].map((value) =>
-          `<option value="${value}"${state.logLevel === value ? " selected" : ""}>${value}</option>`).join("") +
+          `<option value="${value}"${state.logLevel === value ? " selected" : ""}>${LOG_LEVEL_LABEL[value] || value}</option>`).join("") +
         "</select>" +
         '<input class="input small" id="logKeyword" placeholder="关键词" value="' + escapeHtml(state.logKeyword || "") + '" style="max-width:160px" />' +
         '<button class="btn small ghost" id="logRefresh">刷新</button>');
@@ -1445,7 +1466,7 @@
         return `<div class="feed-item">
           <div class="feed-dot" style="background:${tone.soft};color:${tone.color}">${icon("eye")}</div>
           <div class="feed-body">
-            <div class="feed-title">${escapeHtml(item.level || "INFO")} · ${escapeHtml(item.logger || "nian")}</div>
+            <div class="feed-title">${escapeHtml(LOG_LEVEL_LABEL[item.level] || item.level || "信息")} · ${escapeHtml(item.logger || "nian")}</div>
             <div class="feed-sub">${escapeHtml(item.msg || "")}</div>
             <div class="feed-time">${escapeHtml(item.ts || "")}</div>
           </div>
@@ -1540,29 +1561,29 @@
         `<span class="tag ${platform.enabled ? "resolved" : "plain"}">${platform.enabled ? "已启用" : "未启用"}</span>`);
       $("platformForm").innerHTML = `
         <div class="form-grid">
-          <div class="field"><label>Base URL</label><input id="pfBase" value="${escapeHtml(platform.base_url || "")}" /></div>
-          <div class="field"><label>模型名</label><input id="pfModel" value="${escapeHtml(platform.model || "")}" /></div>
-          <div class="field full"><label>API Key${platform.has_key ? "（已配置 " + escapeHtml(platform.api_key_masked || "") + "）" : ""}</label>
+          <div class="field"><label>接口地址（Base URL）</label><input id="pfBase" value="${escapeHtml(platform.base_url || "")}" /></div>
+          <div class="field"><label>模型名称</label><input id="pfModel" value="${escapeHtml(platform.model || "")}" /></div>
+          <div class="field full"><label>平台接口密钥（API Key）${platform.has_key ? "（已配置 " + escapeHtml(platform.api_key_masked || "") + "）" : ""}</label>
             <input id="pfKey" type="password" autocomplete="off" placeholder="${platform.has_key ? "留空保持不变" : "填入平台 API Key"}" /></div>
           <div class="field"><label>每轮扣积分</label><input id="pfCost" type="number" min="0" value="${escapeHtml(String(platform.per_turn_cost == null ? 0 : platform.per_turn_cost))}" /></div>
           <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
           <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
-          <div class="field"><label>蒸馏积分单价</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
+          <div class="field"><label>蒸馏扣积分</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
           <div class="field"><label>语音提供商</label><select id="pfVoiceProvider">
             <option value="minimax" ${(platform.voice_provider || "minimax") === "minimax" ? "selected" : ""}>MiniMax</option>
             <option value="doubao" ${platform.voice_provider === "doubao" ? "selected" : ""}>豆包（火山引擎）</option>
           </select></div>
-          <div class="field full"><label>语音 MiniMax Key${platform.has_voice_key ? "（已配置 " + escapeHtml(platform.voice_key_masked || "") + "）" : ""}</label>
+          <div class="field full"><label>语音 MiniMax 密钥${platform.has_voice_key ? "（已配置 " + escapeHtml(platform.voice_key_masked || "") + "）" : ""}</label>
             <input id="pfVoiceKey" type="password" autocomplete="off" placeholder="${platform.has_voice_key ? "留空保持不变" : "填入 MiniMax API Key"}" /></div>
-          <div class="field"><label>TTS 模型名</label><input id="pfVoiceModel" value="${escapeHtml(platform.voice_tts_model || "speech-02-turbo")}" /></div>
-          <div class="field full"><label>豆包 API Key${platform.has_doubao_key ? "（已配置 " + escapeHtml(platform.doubao_key_masked || "") + "，新版控制台）" : "（新版控制台，可选）"}</label>
+          <div class="field"><label>语音合成模型</label><input id="pfVoiceModel" value="${escapeHtml(platform.voice_tts_model || "speech-02-turbo")}" /></div>
+          <div class="field full"><label>豆包接口密钥${platform.has_doubao_key ? "（已配置 " + escapeHtml(platform.doubao_key_masked || "") + "，新版控制台）" : "（新版控制台，可选）"}</label>
             <input id="pfDoubaoKey" type="password" autocomplete="off" placeholder="${platform.has_doubao_key ? "留空保持不变" : "填入豆包 API Key"}" /></div>
-          <div class="field"><label>豆包 App ID${platform.doubao_app_id ? "（已配置）" : "（旧版控制台）"}</label><input id="pfDoubaoAppId" value="${escapeHtml(platform.doubao_app_id || "")}" /></div>
-          <div class="field"><label>豆包 Access Token${platform.has_doubao_token ? "（已配置 " + escapeHtml(platform.doubao_token_masked || "") + "）" : "（旧版控制台）"}</label>
+          <div class="field"><label>豆包应用 ID${platform.doubao_app_id ? "（已配置）" : "（旧版控制台）"}</label><input id="pfDoubaoAppId" value="${escapeHtml(platform.doubao_app_id || "")}" /></div>
+          <div class="field"><label>豆包访问令牌${platform.has_doubao_token ? "（已配置 " + escapeHtml(platform.doubao_token_masked || "") + "）" : "（旧版控制台）"}</label>
             <input id="pfDoubaoToken" type="password" autocomplete="off" placeholder="${platform.has_doubao_token ? "留空保持不变" : "填入豆包 Access Token"}" /></div>
-          <div class="field"><label>豆包资源 ID</label><input id="pfDoubaoResource" value="${escapeHtml(platform.doubao_resource_id || "")}" placeholder="留空自动推断" /></div>
-          <div class="field"><label>音色克隆成本</label><input id="pfVoiceCloneCost" type="number" min="0" value="${escapeHtml(String(platform.voice_clone_cost == null ? 500 : platform.voice_clone_cost))}" /></div>
-          <div class="field"><label>语音回复成本</label><input id="pfVoiceReplyCost" type="number" min="0" value="${escapeHtml(String(platform.voice_reply_cost == null ? 20 : platform.voice_reply_cost))}" /></div>
+          <div class="field"><label>豆包资源标识</label><input id="pfDoubaoResource" value="${escapeHtml(platform.doubao_resource_id || "")}" placeholder="留空自动推断" /></div>
+          <div class="field"><label>音色克隆扣积分</label><input id="pfVoiceCloneCost" type="number" min="0" value="${escapeHtml(String(platform.voice_clone_cost == null ? 500 : platform.voice_clone_cost))}" /></div>
+          <div class="field"><label>语音回复扣积分</label><input id="pfVoiceReplyCost" type="number" min="0" value="${escapeHtml(String(platform.voice_reply_cost == null ? 20 : platform.voice_reply_cost))}" /></div>
           <div class="field"><label>语音用量</label><input value="克隆 ${escapeHtml(String((platform.voice_usage || {}).clones || 0))} 次 / 回复 ${escapeHtml(String((platform.voice_usage || {}).replies || 0))} 条" disabled /></div>
         </div>
         <div class="toggle-row">

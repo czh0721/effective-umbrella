@@ -88,8 +88,8 @@ class FrontendBackendContractTest(unittest.TestCase):
 class VoiceUiContractTest(unittest.TestCase):
     def test_admin_voice_settings_present(self):
         text = (WEB_ROOT / "admin.html").read_text(encoding="utf-8")
-        for marker in ("语音提供商", "语音 MiniMax Key", "TTS 模型名", "豆包 App ID",
-                       "豆包 Access Token", "音色克隆成本", "语音回复成本", "启用语音服务"):
+        for marker in ("语音提供商", "语音 MiniMax 密钥", "语音合成模型", "豆包应用 ID",
+                       "豆包访问令牌", "音色克隆扣积分", "语音回复扣积分", "启用语音服务"):
             self.assertIn(marker, text)
 
     def test_agent_voice_panel_present(self):
@@ -128,6 +128,34 @@ class VoiceUiContractTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("/api/personas/{persona_id}/voice/samples", source)
         self.assertIn("sample_upload", source)
+
+
+class AdminConsoleStructureTest(unittest.TestCase):
+    def setUp(self):
+        self.text = (WEB_ROOT / "admin.html").read_text(encoding="utf-8")
+
+    def test_nav_split_into_five_zones_in_order(self):
+        nav = self.text.split('id="sideNav"', 1)[1].split("</nav>", 1)[0]
+        labels = re.findall(r'<div class="label">([^<]+)</div>', nav)
+        self.assertEqual(labels, ["概览", "用户运营", "商业化", "系统运维", "权限管理"])
+        tabs = re.findall(r'data-tab="([a-z]+)"', nav)
+        self.assertEqual(
+            tabs,
+            ["overview", "users", "content", "reports", "ops",
+             "orders", "credits", "system", "audit", "admins"],
+        )
+
+    def test_section_description_rendered(self):
+        self.assertIn('id="pageDesc"', self.text)
+        self.assertIn('$("pageDesc").textContent = meta.desc', self.text)
+        for desc in ("一屏速览", "重置密码", "触达效果", "兑换码", "登录锁定"):
+            self.assertIn(desc, self.text)
+
+    def test_status_terms_are_chinese(self):
+        for marker in ("运行中", "空闲", "异常", "已中断", "信息", "警告", "严重"):
+            self.assertIn(marker, self.text)
+        for stale in ("TTS 模型名", "豆包资源 ID", "音色克隆成本", "语音回复成本"):
+            self.assertNotIn(stale, self.text)
 
 
 if __name__ == "__main__":
