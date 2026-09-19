@@ -34,5 +34,11 @@
 
 ## T6 交付
 
-- [x] 提交并 push `main`。
+- [x] 提交并 push `main`（`7982b40`）。
 - [x] 部署生产并核对（编辑人设上传头像后三处展示、清除后回退）。
+
+## 验证记录
+
+- 单测 449/449；e2e 129/129；`ruff check ex_persona tests` 通过。
+- Playwright 本机全链路：列表默认渐变首字 → 编辑弹层上传即时预览 → 保存后工作台/分身列表展示图片 → 朋友圈头像助手可用 → 清除后回退渐变首字；无 JS 报错。
+- 生产部署 `20260919_030816`（DB 备份 `platform_20260919_030816.db`）；`/health` 返回 `{"status":"ok","users":13}`，服务 active；`agent.html`/`app.html`/`moments.html`/`app.js`/`webapp.py` 均已包含对应实现。
