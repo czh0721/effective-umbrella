@@ -1109,35 +1109,67 @@
       ];
       const contacts = (info && info.contacts) || [];
       const cloneStatus = info ? info.clone_status : (v.clone_status || "none");
-      const statusText = { none: "未克隆", pending: "克隆中", ready: "已就绪", failed: "克隆失败" }[cloneStatus] || "未克隆";
       const sampleSeconds = info ? info.sample_seconds : 0;
       const sampleCount = info ? info.sample_count : 0;
       const minSeconds = info ? info.min_seconds : 10;
       const cost = info ? info.clone_cost : 500;
       const ready = info ? info.ready : false;
+      const statusBadge = {
+        none: '<span class="badge b-off">未克隆</span>',
+        pending: '<span class="badge b-warn">克隆中</span>',
+        ready: '<span class="badge b-ok">已就绪</span>',
+        failed: '<span class="badge b-err">失败</span>',
+      }[cloneStatus] || '<span class="badge b-off">未克隆</span>';
+      const statusHint = {
+        none: sampleSeconds < minSeconds
+          ? `还差 ${Math.max(0, Math.ceil(minSeconds - sampleSeconds))} 秒达到克隆要求`
+          : "样本已足够，可开始克隆",
+        pending: "正在学习声音，请稍候",
+        ready: "已用 ta 的声音回复",
+        failed: "上次克隆失败，可重新发起",
+      }[cloneStatus] || "";
       const contact = (info && info.contact) || v.clone_contact || (contacts[0] && contacts[0].contact_key) || "";
       const contactOptions = ['<option value="">选择联系人</option>'].concat(contacts.map((c) =>
         `<option value="${escapeHtml(c.contact_key)}" ${c.contact_key === contact ? "selected" : ""}>${escapeHtml(c.display_name || c.contact_key)}</option>`
       )).join("");
-      openSheet("语音", "识别对方的语音，用 ta 的声音回复", `
-        ${switchRow("语音回复", "文字照常发送，额外发一条语音", !!a.reply_voice, 'id="vReply"')}
-        <div class="setting-row"><div class="label">预设音色</div><div class="spacer"></div>
-          <select id="vPreset">${presets.map((p) => `<option value="${p.id}" ${p.id === preset ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></div>
-        <div class="setting-row"><div class="label">克隆状态</div><div class="spacer"></div><b>${statusText}</b></div>
-        <div class="desc">该联系人语音样本 ${sampleCount} 条 · 累计 ${sampleSeconds} 秒（至少 ${minSeconds} 秒）${ready ? "" : " · 平台未开启语音服务"}</div>
-        <div class="setting-row"><div class="label">克隆对象</div><div class="spacer"></div>
-          <select id="vContact">${contactOptions}</select></div>
-        <label class="desc" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0">
+      openSheet("语音", "用 ta 的声音回复", `
+        ${ready ? "" : '<div class="hint" style="margin:0 0 12px;color:#b06b00">平台尚未开启语音服务，开通后自动生效。</div>'}
+        <div class="stat-strip">
+          <div class="stat"><div class="n">${sampleCount}</div><div class="l">语音样本 · 条</div></div>
+          <div class="stat"><div class="n">${Math.round(sampleSeconds)}s</div><div class="l">累计时长</div></div>
+        </div>
+
+        <div class="group-title">回复设置</div>
+        <div class="setting-group glass">
+          ${switchRow("语音回复", "文字照常发送，额外发一条语音", !!a.reply_voice, 'id="vReply"')}
+          <div class="setting-row">
+            <div class="g-text"><div class="g-title">预设音色</div><div class="g-sub">尚未克隆时使用</div></div>
+            <select id="vPreset">${presets.map((p) => `<option value="${p.id}" ${p.id === preset ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select>
+            <button class="btn ghost small" id="vPreview" style="flex:none">试听</button>
+          </div>
+        </div>
+
+        <div class="group-title">克隆音色</div>
+        <div class="setting-group glass">
+          <div class="setting-row">
+            <div class="g-text"><div class="g-title">克隆对象</div><div class="g-sub">选择要学习声音的联系人</div></div>
+            <select id="vContact">${contactOptions}</select>
+          </div>
+          <div class="g-row">
+            <div class="g-text"><div class="g-title">克隆状态</div><div class="g-sub">${escapeHtml(statusHint)}</div></div>
+            ${statusBadge}
+          </div>
+        </div>
+        <div class="hint">至少 ${minSeconds} 秒样本。可自动收集微信语音，也可上传本地音频（mp3/wav/m4a/amr，单条 ≤5MB、≤120 秒）。</div>
+        <label class="desc" style="display:flex;gap:8px;align-items:flex-start;margin:12px 0 0">
           <input type="checkbox" id="vConsent" />
           <span>我已获得该声音权利人的同意，仅用于本人对话</span></label>
         <input type="file" id="vFile" accept="audio/*" multiple hidden />
         <div class="btnrow">
           <button class="btn ghost" id="vUpload">上传本地音频</button>
-          <button class="btn ghost" id="vPreview">试听</button>
           <button class="btn" id="vClone">克隆音色（${cost} 积分）</button>
         </div>
-        <div class="desc">可上传本地音频（mp3/wav/m4a/amr 等），单条不超过 5MB、120 秒；上传前请先选择克隆对象。</div>
-        <div class="btnrow"><button class="btn primary wide" id="vSave">保存</button></div>`,
+        <div class="btnrow"><button class="btn primary wide" id="vSave">保存设置</button></div>`,
         (body, mask) => {
           body.querySelector("#vSave").onclick = async () => {
             const chosen = body.querySelector("#vPreset").value;

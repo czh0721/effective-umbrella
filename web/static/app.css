@@ -447,6 +447,7 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .li-ico { width: 34px; height: 34px; border-radius: 11px; display: flex; align-items: center; justify-content: center; flex: none; background: rgba(124, 92, 255, 0.09); color: var(--v); }
 .li-ico .ic { width: 17px; height: 17px; }
 
+.setting-group .setting-row { padding-left: 16px; padding-right: 16px; }
 .setting-row { display: flex; align-items: center; gap: 12px; padding: 13px 2px; border-bottom: 1px solid var(--stroke); }
 .setting-row:last-child { border-bottom: none; }
 .setting-row .label { font-size: 14.5px; margin: 0; color: var(--ink); font-weight: 650; }

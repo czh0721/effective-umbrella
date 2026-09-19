@@ -57,6 +57,7 @@
 - [x] `web/agent.html` `openTuning()` 语音区：回复开关、预设音色下拉、克隆状态、样本时长、克隆按钮、试听按钮、同意勾选。
 - [x] `web/static/app.js`：`playVoicePreview` 与音频播放辅助。
 - [x] 保存走 `PATCH /api/personas/{id}` 的 `advanced` 与 `voice` 字段。
+- [x] 排版重做：样本统计卡（条数/时长）+「回复设置」「克隆音色」分组卡片，状态用徽标，按钮归并为上传/克隆与保存两行。
 
 ## T9 测试
 
