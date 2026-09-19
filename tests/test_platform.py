@@ -619,8 +619,10 @@ class PlatformTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         user = response.json()["user"]
-        # 蒸馏需要消耗蒸馏券，测试账号统一预置若干张。
-        store.grant_distill_tickets(user["id"], 20, reason="测试发放", actor="test")
+        # 蒸馏需要消耗积分，测试账号统一预置足额积分。
+        store.grant_credits(
+            user["id"], 5000, reason="测试发放", actor="test", source="gift"
+        )
         return user
 
     def test_wechat_status_keeps_expired_phase(self):

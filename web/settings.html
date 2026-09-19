@@ -48,22 +48,6 @@
         <span class="aw-note">用念念币兑换 · 到期未用清零</span>
       </div>
       <div class="credit-pack-list" id="packageList"></div>
-      <div class="aw-divider"></div>
-      <div class="aw-head">
-        <span class="aw-title">蒸馏券</span>
-        <span class="aw-note" id="ticketPrice">购买蒸馏券</span>
-      </div>
-      <div class="pack-row" id="ticketRow">
-        <div class="pack-main">
-          <div class="pack-name"><span class="pack-label">剩余</span></div>
-          <div class="pack-amount"><b id="ticketCount">0</b><span>张</span></div>
-          <div class="pack-sub" id="ticketHint">每次蒸馏消耗 1 张，失败自动退还</div>
-        </div>
-        <div class="pack-side">
-          <div class="pack-note" id="ticketNote"></div>
-          <button class="btn small primary" id="buyTicketBtn">购买</button>
-        </div>
-      </div>
     </section>
 
     <div class="group-title">服务</div>
@@ -223,7 +207,6 @@
       const tiers = [...groups.entries()].filter(([, items]) => items.length);
       if (!tiers.length) {
         $("packageList").innerHTML = '<div class="mini" style="padding:10px 0">暂无可用套餐</div>';
-        renderTickets(data);
         return;
       }
       let card = 0;
@@ -231,11 +214,8 @@
         const featured = !!p.badge;
         const short = Number(p.coins) > coins;
         const bonusCredits = Number(p.bonus_credits) || 0;
-        const bonusTickets = Number(p.bonus_tickets) || 0;
-        const bonus = [
-          bonusCredits > 0 ? '<i class="bonus-chip">送 ' + bonusCredits + " 积分</i>" : "",
-          bonusTickets > 0 ? '<i class="bonus-chip">送 ' + bonusTickets + " 张蒸馏券</i>" : "",
-        ].join("");
+        const bonus = bonusCredits > 0
+          ? '<i class="bonus-chip">送 ' + bonusCredits + " 积分</i>" : "";
         return `
         <div class="pack-row credit-pack${featured ? " featured" : ""}${short ? " is-short" : ""}" style="animation-delay:${(card++) * 40}ms">
           <div class="pack-main">
@@ -275,35 +255,6 @@
         try {
           await api("/api/packages/" + btn.dataset.buy + "/purchase", { method: "POST", headers: { "Idempotency-Key": idem } });
           toast("套餐已到账");
-          await load();
-        } catch (error) { toast(error.message); btn.disabled = false; }
-      };
-      renderTickets(data);
-    }
-
-    function renderTickets(data) {
-      const info = data.distill_tickets || {};
-      const price = Number(info.price) || 0;
-      const count = Number(info.balance) || 0;
-      const cost = Number(data.coins) || 0;
-      $("ticketCount").textContent = count;
-      $("ticketPrice").textContent = price > 0 ? ("单张 " + price + " 念念币") : "当前免费";
-      const note = $("ticketNote");
-      if (note) note.textContent = price > 0 && cost < price ? "念念币不足" : "";
-      const btn = $("buyTicketBtn");
-      btn.textContent = price > 0 ? ("购买 · " + price) : "领取";
-      btn.disabled = price > 0 && cost < price;
-      btn.onclick = async () => {
-        if (btn.disabled) return;
-        btn.disabled = true;
-        const idem = crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(16).slice(2);
-        try {
-          await api("/api/distill-tickets/purchase", {
-            method: "POST",
-            headers: { "Idempotency-Key": idem },
-            body: JSON.stringify({ quantity: 1, client_id: idem }),
-          });
-          toast("蒸馏券已到账");
           await load();
         } catch (error) { toast(error.message); btn.disabled = false; }
       };

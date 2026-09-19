@@ -462,25 +462,27 @@ def _update_task(task_id: str, **fields) -> None:
 
 
 def _reserve_distill_ticket(user_id: int, task_id: str) -> None:
-    """发起蒸馏前预扣 1 张蒸馏券；券不足时返回 402。"""
+    """发起蒸馏前预扣蒸馏积分；积分不足时返回 402。"""
     try:
-        store.reserve_distill_ticket(user_id, task_id)
-    except store.InsufficientDistillTickets as error:
+        store.reserve_distill_credits(user_id, task_id)
+    except store.InsufficientCredits as error:
+        cost = store.distill_credit_cost()
         raise HTTPException(
-            status_code=402, detail=f"蒸馏券不足，请先购买蒸馏券（当前 {error.balance} 张）"
+            status_code=402,
+            detail=f"积分不足，蒸馏需要 {cost} 积分（当前 {error.balance} 积分）",
         ) from error
 
 
 def _refund_distill_ticket(user_id: int, task_id: str, reason: str = "") -> None:
-    """蒸馏失败/取消时幂等退还预扣的蒸馏券。"""
+    """蒸馏失败/取消时幂等退还预扣的蒸馏积分。"""
     try:
-        store.refund_distill_ticket(
-            user_id, task_id, reason or store.TICKET_REFUND_REASON
+        store.refund_distill_credits(
+            user_id, task_id, reason or store.DISTILL_REFUND_REASON
         )
     except Exception as error:  # noqa: BLE001 - 退款失败只记录，不影响主流程
         log.warning(
-            "refund distill ticket failed",
-            extra={"event": "distill.ticket_refund_error", "user_id": user_id,
+            "refund distill credits failed",
+            extra={"event": "distill.credit_refund_error", "user_id": user_id,
                    "task_id": task_id, "error": str(error)},
         )
 
@@ -622,7 +624,7 @@ def _startup() -> None:
     observability.setup_logging()
     store.prune_tasks()
     store.fail_stale_tasks()
-    store.reconcile_distill_tickets()
+    store.reconcile_distill_credits()
     store.purge_expired_sessions()
     store.purge_expired_login_states()
     store.purge_expired_admin_sessions()
@@ -1268,6 +1270,7 @@ class PlatformConfigRequest(BaseModel):
     per_turn_cost: int | None = None
     new_user_gift: int | None = None
     default_credit_days: int | None = None
+    distill_credit_cost: int | None = None
     distill_ticket_price: int | None = None
     distill_ticket_gift: int | None = None
 
@@ -1592,10 +1595,12 @@ def register(payload: Credentials, request: Request) -> JSONResponse:
             user["id"], platform.new_user_gift, reason="新用户注册赠送", actor="system",
             ref="register", expires_days=platform.default_credit_days, source="gift",
         )
-    if platform.distill_ticket_gift > 0:
-        store.grant_distill_tickets(
-            user["id"], platform.distill_ticket_gift, reason="新用户注册赠送",
-            actor="system", ref="register", idem="register",
+    if platform.distill_ticket_gift > 0 and platform.distill_credit_cost > 0:
+        store.grant_credits(
+            user["id"], platform.distill_ticket_gift * platform.distill_credit_cost,
+            reason="新用户注册赠送（蒸馏积分）", actor="system",
+            ref="register-distill", expires_days=platform.default_credit_days,
+            source="gift", idem="register-distill",
         )
     return _login_response(user, request)
 
@@ -1750,8 +1755,7 @@ def me(user: dict = Depends(current_user)) -> dict:
     platform_config = load_platform_config()
     credits["per_turn_cost"] = platform_config.per_turn_cost
     credits["coins"] = store.get_coins(user["id"])
-    credits["distill_tickets"] = store.get_distill_tickets(user["id"])
-    credits["distill_ticket_price"] = platform_config.distill_ticket_price
+    credits["distill_credit_cost"] = store.distill_credit_cost()
     memory_total = sum(store.count_memories(user["id"], persona["id"]) for persona in personas)
     return {
         "user": _public_user(user),
@@ -2067,7 +2071,7 @@ async def create_and_distill(
             }
     _ensure_persona_quota(user["id"])
     task_id = uuid.uuid4().hex
-    # 先预扣蒸馏券，后续任一步骤失败都退还，避免占用额度。
+    # 先预扣蒸馏积分，后续任一步骤失败都退还，避免占用额度。
     _reserve_distill_ticket(user["id"], task_id)
     try:
         clean = (name or "").strip() or "未命名人格"
@@ -3046,7 +3050,6 @@ def get_credits(user: dict = Depends(current_user)) -> dict:
     platform = load_platform_config()
     coins = store.coins_summary(user["id"])
     summary = store.credits_summary(user["id"])
-    tickets = store.distill_tickets_summary(user["id"])
     return {
         "balance": summary["balance"],
         "summary": summary,
@@ -3064,7 +3067,7 @@ def get_credits(user: dict = Depends(current_user)) -> dict:
         "batches": store.list_credit_batches(user["id"], limit=20, live_only=True),
         "ledger": store.list_credit_ledger(user["id"], limit=20),
         "coin_ledger": store.list_coin_ledger(user["id"], limit=20),
-        "distill_tickets": tickets,
+        "distill_credit_cost": store.distill_credit_cost(),
         "distill_ticket_ledger": store.list_distill_ticket_ledger(user["id"], limit=20),
     }
 
@@ -3080,27 +3083,11 @@ def purchase_distill_tickets(
     user: dict = Depends(current_user),
     idempotency_key: str = Header("", alias="Idempotency-Key"),
 ) -> dict:
-    idem = (payload.client_id or idempotency_key).strip()[:64]
-    quantity = max(int(payload.quantity or 1), 1)
-    quantity = min(quantity, 100)
-    try:
-        result = store.purchase_distill_ticket(user["id"], quantity, idem=idem)
-    except store.InsufficientCoins as error:
-        raise HTTPException(
-            status_code=402, detail=f"念念币不足，当前 {error.balance} 念念币"
-        ) from error
-    except KeyError as error:
-        raise HTTPException(status_code=400, detail=str(error.args[0])) from error
-    if not result.get("duplicate"):
-        _audit(user, "distill_ticket.purchase", detail=f"qty={quantity} spent={result['spent']}")
-    return {
-        "ok": True,
-        "coins": result["coins"],
-        "distill_tickets": store.distill_tickets_summary(user["id"]),
-        "coins_summary": store.coins_summary(user["id"]),
-        "duplicate": bool(result.get("duplicate")),
-        "spent": result["spent"],
-    }
+    # 蒸馏券已取消：蒸馏改为直接消耗积分，不再提供券购买入口。
+    raise HTTPException(
+        status_code=410,
+        detail="蒸馏券已取消，蒸馏将直接消耗积分，无需购买",
+    )
 
 
 @app.post("/api/redeem")
@@ -3933,7 +3920,7 @@ def admin_orders_export(
     rows = store.list_orders(
         query=q, package_id=package_id, from_iso=from_date, to_iso=to_date, limit=5000
     )
-    header = ["订单号", "用户ID", "用户名", "套餐", "基础积分", "赠送积分", "赠送蒸馏券", "念念币", "下单时间"]
+    header = ["订单号", "用户ID", "用户名", "套餐", "基础积分", "赠送积分", "念念币", "下单时间"]
     data = [
         [
             row.get("id"),
@@ -3942,7 +3929,6 @@ def admin_orders_export(
             row.get("package_name"),
             row.get("credits"),
             row.get("bonus_credits"),
-            row.get("bonus_tickets"),
             row.get("coins"),
             row.get("created_at"),
         ]
@@ -4678,6 +4664,7 @@ def admin_get_platform(admin: dict = Depends(current_admin)) -> dict:
         "per_turn_cost": platform.per_turn_cost,
         "new_user_gift": platform.new_user_gift,
         "default_credit_days": platform.default_credit_days,
+        "distill_credit_cost": platform.distill_credit_cost,
         "distill_ticket_price": platform.distill_ticket_price,
         "distill_ticket_gift": platform.distill_ticket_gift,
         "has_key": bool(row.get("api_key_encrypted")),
@@ -4712,6 +4699,10 @@ def admin_set_platform(
         )
     except store.InvalidValidityDays as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    raw_cost = (payload.distill_credit_cost if payload.distill_credit_cost is not None
+                else row.get("distill_credit_cost"))
+    distill_credit_cost = (store.DISTILL_CREDIT_COST_DEFAULT if raw_cost in (None, "")
+                           else max(int(raw_cost), 0))
     distill_ticket_price = (
         max(int(payload.distill_ticket_price), 0) if payload.distill_ticket_price is not None
         else int(row.get("distill_ticket_price") or 0)
@@ -4723,6 +4714,7 @@ def admin_set_platform(
     store.set_platform_config(
         encrypted, base_url, model, enabled, per_turn_cost, new_user_gift,
         default_credit_days=default_credit_days,
+        distill_credit_cost=distill_credit_cost,
         distill_ticket_price=distill_ticket_price,
         distill_ticket_gift=distill_ticket_gift,
     )
@@ -4730,7 +4722,7 @@ def admin_set_platform(
     _audit(
         admin, "platform.update",
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
-                f" days={default_credit_days} ticket={distill_ticket_price}"
+                f" days={default_credit_days} distill={distill_credit_cost}"
                 f" ticket_gift={distill_ticket_gift}"),
     )
     return admin_get_platform(admin)

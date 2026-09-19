@@ -282,6 +282,7 @@ CREATE TABLE IF NOT EXISTS platform_config (
     per_turn_cost INTEGER NOT NULL DEFAULT 1,
     new_user_gift INTEGER NOT NULL DEFAULT 100,
     default_credit_days INTEGER NOT NULL DEFAULT 30,
+    distill_credit_cost INTEGER NOT NULL DEFAULT 100,
     distill_ticket_price INTEGER NOT NULL DEFAULT 60,
     distill_ticket_gift INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
@@ -536,6 +537,7 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
     },
     "platform_config": {
         "default_credit_days": "INTEGER NOT NULL DEFAULT 30",
+        "distill_credit_cost": "INTEGER NOT NULL DEFAULT 100",
         "distill_ticket_price": "INTEGER NOT NULL DEFAULT 60",
         "distill_ticket_gift": "INTEGER NOT NULL DEFAULT 0",
     },
@@ -560,16 +562,18 @@ def credit_validity_label(days: object) -> str:
 # 每个元素为 (name, credits, coins, badge, sort, validity_days, bonus_credits, bonus_tickets)。
 # 定价口径：1 元 = 10 念念币，1 念念币 = 100 积分，每轮扣 20 积分（即 ¥0.02/轮），
 # 目标毛利率 60%（上游成本约 ¥0.008/轮）。coins 即念念币售价，price_cents 为人民币分展示价。
+# 蒸馏券已取消：原尊享档赠送的 1/2/3 张券按蒸馏单价 100 积分折算为 100/200/300 积分，
+# bonus_tickets 统一为 0，仅保留列以兼容历史数据。
 PACKAGE_TIERS = (
     ("轻享月卡", 4900, 49, "", 11, 30, 0, 0),
     ("标准月卡", 9900, 99, "推荐", 12, 30, 0, 0),
-    ("尊享月卡", 19900, 199, "超值", 13, 30, 0, 1),
+    ("尊享月卡", 19900, 199, "超值", 13, 30, 100, 0),
     ("轻享季卡", 12900, 129, "", 21, 90, 0, 0),
     ("标准季卡", 25900, 259, "推荐", 22, 90, 0, 0),
-    ("尊享季卡", 49900, 499, "超值", 23, 90, 0, 2),
+    ("尊享季卡", 49900, 499, "超值", 23, 90, 200, 0),
     ("轻享年卡", 39900, 399, "", 31, 365, 0, 0),
     ("标准年卡", 79900, 799, "推荐", 32, 365, 0, 0),
-    ("尊享年卡", 159900, 1599, "超值", 33, 365, 0, 3),
+    ("尊享年卡", 159900, 1599, "超值", 33, 365, 300, 0),
 )
 
 # 被新档位替换的旧跨时长套餐，一次性下架（保留数据与历史订单）。
@@ -693,6 +697,7 @@ def init_db() -> None:
             _migrate_account_security(conn)
             _migrate_package_tiers(conn)
             _migrate_retire_entry_package(conn)
+            _migrate_distill_credits(conn)
             seed_at = utcnow()
             conn.executemany(
                 "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
@@ -827,6 +832,72 @@ def _migrate_retire_entry_package(conn: sqlite3.Connection) -> None:
         (now, *RETIRED_PACKAGE_NAMES),
     )
     _meta_set(conn, "packages_retired_v1", "1")
+
+
+def _migrate_distill_credits(conn: sqlite3.Connection) -> None:
+    """一次性把蒸馏券折算为等值积分（幂等，只执行一次）。
+
+    蒸馏券取消后统一用积分计价。这里把存量券余额、被中断任务未退还的预扣券、
+    套餐赠送券全部按蒸馏单价折算为积分，并把券余额归零；用 ``schema_meta`` 标记
+    保证只执行一次。历史券流水与订单保留不删。
+    """
+    if _meta_get(conn, "distill_credits_v1") == "1":
+        return
+    row = conn.execute(
+        "SELECT distill_credit_cost, default_credit_days FROM platform_config WHERE id = 1"
+    ).fetchone()
+    cost = int(row["distill_credit_cost"]) if row and row["distill_credit_cost"] not in (None, "") \
+        else DISTILL_CREDIT_COST_DEFAULT
+    cost = max(cost, 0)
+    days = normalize_validity_days(row["default_credit_days"]) if row else DEFAULT_CREDIT_DAYS
+    now = utcnow()
+    # 1) 存量券余额折算为积分
+    for user in conn.execute(
+        "SELECT id, distill_tickets FROM users WHERE distill_tickets > 0"
+    ).fetchall():
+        user_id = int(user["id"])
+        tickets = int(user["distill_tickets"])
+        credits = tickets * cost
+        if credits > 0:
+            _insert_credit_grant_conn(
+                conn, user_id, credits, DISTILL_CONVERT_REASON,
+                "distill-ticket-migration", source="migration", expires_days=days,
+            )
+        conn.execute(
+            "INSERT INTO distill_ticket_ledger (user_id, delta, balance_after, reason,"
+            " actor, ref, created_at) VALUES (?, ?, 0, ?, 'system', ?, ?)",
+            (user_id, -tickets, "折算为积分", "distill-ticket-migration", now),
+        )
+        conn.execute("UPDATE users SET distill_tickets = 0 WHERE id = ?", (user_id,))
+    # 2) 中断蒸馏任务未退还的预扣券折算为积分退还
+    for task in conn.execute(
+        "SELECT id, user_id FROM tasks"
+        " WHERE kind IN ('distill', 'redistill')"
+        " AND status IN ('queued', 'pending', 'running')"
+    ).fetchall():
+        user_id = int(task["user_id"])
+        task_id = str(task["id"])
+        if not _outstanding_reservation(conn, user_id, task_id):
+            continue
+        if cost > 0:
+            _insert_credit_grant_conn(
+                conn, user_id, cost, DISTILL_INTERRUPT_REASON, f"task:{task_id}",
+                source="distill", expires_days=days,
+            )
+        conn.execute(
+            "INSERT INTO distill_ticket_ledger (user_id, delta, balance_after, reason,"
+            " actor, ref, created_at) VALUES (?, 1, (SELECT distill_tickets FROM users"
+            " WHERE id = ?), ?, 'system', ?, ?)",
+            (user_id, user_id, "折算为积分", f"task:{task_id}", now),
+        )
+    # 3) 套餐赠送券折算进赠送积分
+    if cost > 0:
+        conn.execute(
+            "UPDATE credit_packages SET bonus_credits = bonus_credits + bonus_tickets * ?,"
+            " bonus_tickets = 0, updated_at = ? WHERE bonus_tickets > 0",
+            (cost, now),
+        )
+    _meta_set(conn, "distill_credits_v1", "1")
 
 
 def _meta_get(conn: sqlite3.Connection, key: str) -> str:
@@ -4479,6 +4550,7 @@ def set_platform_config(
     per_turn_cost: int,
     new_user_gift: int,
     default_credit_days: int | None = None,
+    distill_credit_cost: int | None = None,
     distill_ticket_price: int | None = None,
     distill_ticket_gift: int | None = None,
 ) -> dict:
@@ -4488,6 +4560,10 @@ def set_platform_config(
         default_credit_days if default_credit_days is not None
         else current.get("default_credit_days")
     )
+    raw_cost = (distill_credit_cost if distill_credit_cost is not None
+                else current.get("distill_credit_cost"))
+    credit_cost = (DISTILL_CREDIT_COST_DEFAULT if raw_cost in (None, "")
+                   else max(int(raw_cost), 0))
     ticket_price = max(int(
         distill_ticket_price if distill_ticket_price is not None
         else current.get("distill_ticket_price", 60) or 0
@@ -4499,17 +4575,20 @@ def set_platform_config(
     with _lock, connect() as conn:
         conn.execute(
             "INSERT INTO platform_config (id, api_key_encrypted, base_url, model, enabled,"
-            " per_turn_cost, new_user_gift, default_credit_days, distill_ticket_price,"
-            " distill_ticket_gift, updated_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " per_turn_cost, new_user_gift, default_credit_days, distill_credit_cost,"
+            " distill_ticket_price, distill_ticket_gift, updated_at)"
+            " VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET api_key_encrypted = excluded.api_key_encrypted,"
             " base_url = excluded.base_url, model = excluded.model, enabled = excluded.enabled,"
             " per_turn_cost = excluded.per_turn_cost, new_user_gift = excluded.new_user_gift,"
             " default_credit_days = excluded.default_credit_days,"
+            " distill_credit_cost = excluded.distill_credit_cost,"
             " distill_ticket_price = excluded.distill_ticket_price,"
             " distill_ticket_gift = excluded.distill_ticket_gift,"
             " updated_at = excluded.updated_at",
             (api_key_encrypted, base_url, model, 1 if enabled else 0,
-             int(per_turn_cost), int(new_user_gift), days, ticket_price, ticket_gift, utcnow()),
+             int(per_turn_cost), int(new_user_gift), days, credit_cost, ticket_price,
+             ticket_gift, utcnow()),
         )
     return get_platform_config_row() or {}
 
@@ -5014,9 +5093,24 @@ TICKET_BUY_REASON = "蒸馏券购买"
 TICKET_RESERVE_REASON = "蒸馏预扣"
 TICKET_REFUND_REASON = "蒸馏失败退还"
 
+# 蒸馏券已取消，蒸馏改为直接消耗积分。以下常量用于积分口径的预扣、退还与折算。
+DISTILL_CREDIT_COST_DEFAULT = 100
+DISTILL_RESERVE_REASON = "蒸馏预扣"
+DISTILL_REFUND_REASON = "蒸馏失败退还"
+DISTILL_CONVERT_REASON = "蒸馏券折算"
+DISTILL_INTERRUPT_REASON = "蒸馏中断退还"
+
+
+def distill_credit_cost() -> int:
+    """发起一次人格蒸馏预扣的积分数（后台可配，默认 100）。"""
+    from . import config as _config
+    cost = int(getattr(_config.load_platform_config(), "distill_credit_cost",
+                       DISTILL_CREDIT_COST_DEFAULT))
+    return max(cost, 0)
+
 
 def distill_ticket_price() -> int:
-    """单张蒸馏券的念念币价格（后台可配，默认 60）。"""
+    """单张蒸馏券的念念币价格（历史字段，默认 60）。"""
     from . import config as _config
     return max(int(_config.load_platform_config().distill_ticket_price), 0)
 
@@ -5227,7 +5321,136 @@ def list_distill_ticket_ledger(user_id: int, limit: int = 20) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _distill_credit_outstanding_conn(
+    conn: sqlite3.Connection, user_id: int, task_id: str
+) -> int:
+    """返回某蒸馏任务尚未退还的预扣积分数（0 表示无需退还）。"""
+    ref = f"task:{str(task_id)}"
+    row = conn.execute(
+        "SELECT"
+        " COALESCE((SELECT SUM(-delta) FROM credit_ledger WHERE user_id = ? AND ref = ?"
+        "   AND delta < 0), 0) AS reserved,"
+        " COALESCE((SELECT SUM(delta) FROM credit_ledger WHERE user_id = ? AND ref = ?"
+        "   AND delta > 0), 0) AS refunded",
+        (int(user_id), ref, int(user_id), ref),
+    ).fetchone()
+    return max(int(row["reserved"]) - int(row["refunded"]), 0)
+
+
+def _default_credit_days() -> int:
+    row = get_platform_config_row() or {}
+    return normalize_validity_days(row.get("default_credit_days"))
+
+
+def _insert_credit_grant_conn(
+    conn: sqlite3.Connection,
+    user_id: int,
+    amount: int,
+    reason: str,
+    ref: str,
+    source: str = "distill",
+    expires_days: int | None = None,
+) -> int:
+    """在既有连接内直接发放积分批次并写流水（供迁移/对账单事务使用）。"""
+    amount = int(amount)
+    row = conn.execute("SELECT credits FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    if row is None:
+        raise KeyError("用户不存在")
+    if amount <= 0:
+        return int(row["credits"])
+    now = utcnow()
+    days = normalize_validity_days(
+        expires_days if expires_days is not None else _default_credit_days()
+    )
+    conn.execute(
+        "INSERT INTO credit_batches (user_id, amount, remaining, source, package_id,"
+        " reason, actor, ref, expires_at, created_at) VALUES (?, ?, ?, ?, NULL, ?,"
+        " 'system', ?, ?, ?)",
+        (int(user_id), amount, amount, str(source or "distill"), reason, ref,
+         _expires_at(days, now), now),
+    )
+    conn.execute("UPDATE users SET credits = credits + ? WHERE id = ?", (amount, int(user_id)))
+    balance = int(
+        conn.execute("SELECT credits FROM users WHERE id = ?", (int(user_id),)).fetchone()["credits"]
+    )
+    conn.execute(
+        "INSERT INTO credit_ledger (user_id, delta, balance_after, reason, actor, ref,"
+        " created_at) VALUES (?, ?, ?, ?, 'system', ?, ?)",
+        (int(user_id), amount, balance, reason, ref, now),
+    )
+    return balance
+
+
+def reserve_distill_credits(user_id: int, task_id: str) -> dict:
+    """发起蒸馏前预扣一次蒸馏积分；不足时抛出 InsufficientCredits。"""
+    cost = distill_credit_cost()
+    if cost <= 0:
+        return {"cost": 0, "reserved": False}
+    result = grant_credits(
+        int(user_id), -cost, reason=DISTILL_RESERVE_REASON, actor="system",
+        ref=f"task:{str(task_id)}", idem=f"distill.reserve:{str(task_id)}", source="distill",
+    )
+    if result.get("duplicate"):
+        return {"cost": cost, "reserved": False, "duplicate": True}
+    return {"cost": cost, "reserved": True}
+
+
+def refund_distill_credits(
+    user_id: int, task_id: str, reason: str = DISTILL_REFUND_REASON
+) -> dict:
+    """蒸馏失败/取消时退还预扣积分；同一任务至多退一次。"""
+    _ensure()
+    with connect() as conn:
+        outstanding = _distill_credit_outstanding_conn(conn, int(user_id), str(task_id))
+    if outstanding <= 0:
+        return {"refunded": False, "amount": 0, "duplicate": True}
+    result = grant_credits(
+        int(user_id), outstanding, reason=reason, actor="system",
+        ref=f"task:{str(task_id)}", idem=f"distill.refund:{str(task_id)}", source="distill",
+    )
+    if result.get("duplicate"):
+        return {"refunded": False, "amount": 0, "duplicate": True}
+    return {"refunded": True, "amount": outstanding, "duplicate": False}
+
+
+def reconcile_distill_credits() -> dict:
+    """启动对账：退还中断蒸馏任务的预扣积分，避免积分被永久占用。"""
+    _ensure()
+    refunded = 0
+    with _lock, connect() as conn:
+        rows = conn.execute(
+            "SELECT id, user_id FROM tasks"
+            " WHERE kind IN ('distill', 'redistill')"
+            " AND status IN ('queued', 'pending', 'running')"
+        ).fetchall()
+        for row in rows:
+            user_id = int(row["user_id"])
+            task_id = str(row["id"])
+            outstanding = _distill_credit_outstanding_conn(conn, user_id, task_id)
+            if outstanding <= 0:
+                continue
+            if not _claim_idempotency(conn, user_id, "distill.refund", task_id):
+                continue
+            _insert_credit_grant_conn(
+                conn, user_id, outstanding, DISTILL_INTERRUPT_REASON, f"task:{task_id}",
+                source="distill",
+            )
+            now = utcnow()
+            conn.execute(
+                "UPDATE tasks SET status = 'error', error = ?, error_kind = 'interrupted',"
+                " updated_at = ? WHERE id = ?",
+                ("服务重启导致蒸馏中断，蒸馏积分已退还", now, task_id),
+            )
+            refunded += 1
+    return {"refunded": refunded}
+
+
 def reconcile_distill_tickets() -> dict:
+    """兼容旧调用：蒸馏券已取消，改用积分口径对账。"""
+    return reconcile_distill_credits()
+
+
+def _reconcile_distill_tickets_legacy() -> dict:
     """启动对账：为中断的蒸馏任务退还预扣券，避免券被永久占用。"""
     _ensure()
     refunded = 0
@@ -5300,7 +5523,8 @@ def purchase_package(user_id: int, package_id: int, idem: str = "") -> dict:
         price = max(int(package["coins"]), 0)
         base_gain = max(int(package["credits"]), 0)
         bonus_credits = max(int(package["bonus_credits"]), 0)
-        bonus_tickets = max(int(package["bonus_tickets"]), 0)
+        # 蒸馏券已取消：套餐不再发放券，赠送额度统一走 bonus_credits。
+        bonus_tickets = 0
         gain = base_gain + bonus_credits
         days = normalize_validity_days(package["validity_days"])
         cursor = conn.execute(

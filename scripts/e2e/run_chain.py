@@ -91,18 +91,16 @@ def main():
     check("创建人格 200", created.status_code == 200, created.text[:120])
     pid = created.json()["persona"]["id"]
 
-    # 2b. 蒸馏券：无券 402 -> 购买 -> 重蒸馏预扣
-    no_ticket = client.post(f"/api/personas/{pid}/redistill", json={"use_llm": True})
-    check("无券重蒸馏 402", no_ticket.status_code == 402, no_ticket.text[:120])
-    store.grant_coins(user_id, 200, reason="e2e 买券准备")
-    coins_before_ticket = client.get("/api/credits").json()["coins"]
+    # 2b. 蒸馏券已取消：蒸馏直接扣积分，券购买接口下线
+    credits0 = client.get("/api/credits").json()
+    check("蒸馏积分单价 100", credits0.get("distill_credit_cost") == 100,
+          str(credits0.get("distill_credit_cost")))
+    check("credits 不再返回蒸馏券余额字段", "distill_tickets" not in credits0,
+          str(sorted(credits0.keys()))[:140])
     buy_ticket = client.post("/api/distill-tickets/purchase", json={"quantity": 2})
-    check("购买蒸馏券 200", buy_ticket.status_code == 200, buy_ticket.text[:140])
-    after_ticket = client.get("/api/credits").json()
-    check("购券扣 120 念念币", coins_before_ticket - after_ticket["coins"] == 120,
-          f"{coins_before_ticket}->{after_ticket['coins']}")
-    check("蒸馏券到账 2 张", after_ticket["distill_tickets"]["balance"] == 2,
-          str(after_ticket.get("distill_tickets")))
+    check("购买蒸馏券已下线 410", buy_ticket.status_code == 410, buy_ticket.text[:140])
+    store.grant_coins(user_id, 200, reason="e2e 念念币准备")
+    store.grant_credits(user_id, 1000, reason="e2e 蒸馏积分准备", source="gift")
 
     # 3. 素材 + 解析
     paste = client.post("/api/paste", json={"text": TRANSCRIPT})
@@ -122,7 +120,8 @@ def main():
     check("画像含共同回忆", len(card.get("memories") or []) >= 1, f"{len(card.get('memories') or [])} 条")
 
     # 5. 异步重蒸馏 + 任务轮询
-    tickets_before_re = client.get("/api/credits").json()["distill_tickets"]["balance"]
+    distill_cost = client.get("/api/credits").json()["distill_credit_cost"]
+    balance_before_re = client.get("/api/credits").json()["balance"]
     re_task = client.post(f"/api/personas/{pid}/redistill", json={"use_llm": True}).json()["task_id"]
     status = "running"
     for _ in range(60):
@@ -132,9 +131,9 @@ def main():
             break
         time.sleep(0.3)
     check("异步蒸馏任务完成", status in ("success", "done"), f"status={status}")
-    tickets_after_re = client.get("/api/credits").json()["distill_tickets"]["balance"]
-    check("重蒸馏扣 1 张蒸馏券", tickets_before_re - tickets_after_re == 1,
-          f"{tickets_before_re}->{tickets_after_re}")
+    balance_after_re = client.get("/api/credits").json()["balance"]
+    check("重蒸馏扣 100 积分", balance_before_re - balance_after_re == distill_cost,
+          f"{balance_before_re}->{balance_after_re}")
 
     # 6. 绑定桥接令牌
     token = crypto.new_bridge_token(user_id)
@@ -261,29 +260,27 @@ def main():
 
     pkg = client.post("/api/admin/packages", json={
         "name": "体验包", "coins": 30, "credits": 300, "active": True,
-        "validity_days": 30, "bonus_credits": 20, "bonus_tickets": 1,
+        "validity_days": 30, "bonus_credits": 20,
     })
     check("后台创建套餐 200", pkg.status_code == 200, pkg.text[:140])
     if pkg.status_code == 200:
         created = pkg.json()["package"]
         check("套餐返回赠送字段",
-              created.get("bonus_credits") == 20 and created.get("bonus_tickets") == 1,
+              created.get("bonus_credits") == 20 and created.get("bonus_tickets") == 0,
               str({k: created.get(k) for k in ("bonus_credits", "bonus_tickets")}))
         check("套餐返回档位标签", created.get("validity_label") == "月度", str(created.get("validity_label")))
     packages = client.get("/api/credits").json()["packages"]
     target = next((p for p in packages if p.get("name") == "体验包"), None)
     check("套餐出现在列表", target is not None and target.get("bonus_credits") == 20, str(packages)[:120])
     if target:
-        tickets_before = client.get("/api/credits").json().get("distill_tickets", {}).get("balance", 0)
         before_buy = client.get("/api/credits").json()
         buy = client.post(f"/api/packages/{target['id']}/purchase")
         after_buy = client.get("/api/credits").json()
         check("购买套餐 200", buy.status_code == 200, buy.text[:140])
         check("扣念念币发积分", after_buy["coins"] == before_buy["coins"] - 30 and after_buy["balance"] == before_buy["balance"] + 320,
               f"coins {before_buy['coins']}->{after_buy['coins']}, credits {before_buy['balance']}->{after_buy['balance']}")
-        check("套餐赠送蒸馏券",
-              after_buy.get("distill_tickets", {}).get("balance", 0) == tickets_before + 1,
-              f"{tickets_before}->{after_buy.get('distill_tickets', {}).get('balance')}")
+        check("套餐不再发放蒸馏券", "distill_tickets" not in after_buy,
+              str(sorted(after_buy.keys()))[:140])
 
     tier_names = {
         "轻享月卡", "标准月卡", "尊享月卡",

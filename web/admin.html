@@ -1547,8 +1547,8 @@
           <div class="field"><label>每轮扣积分</label><input id="pfCost" type="number" min="0" value="${escapeHtml(String(platform.per_turn_cost == null ? 0 : platform.per_turn_cost))}" /></div>
           <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
           <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
-          <div class="field"><label>蒸馏券单价(念念币)</label><input id="pfTicketPrice" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_price == null ? 60 : platform.distill_ticket_price))}" /></div>
-          <div class="field"><label>注册赠送蒸馏券</label><input id="pfTicketGift" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_gift == null ? 0 : platform.distill_ticket_gift))}" /></div>
+          <div class="field"><label>蒸馏积分单价</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
+          <div class="field"><label>注册赠送蒸馏次数</label><input id="pfDistillGift" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_gift == null ? 0 : platform.distill_ticket_gift))}" /></div>
         </div>
         <div class="toggle-row">
           <div class="tt"><b>启用平台模型</b><span>关闭后未配置 Key 的用户将无法获得回复</span></div>
@@ -1569,8 +1569,8 @@
             per_turn_cost: Number($("pfCost").value) || 0,
             new_user_gift: Number($("pfGift").value) || 0,
             default_credit_days: Number($("pfDefaultDays").value) || 30,
-            distill_ticket_price: Number($("pfTicketPrice").value) || 0,
-            distill_ticket_gift: Number($("pfTicketGift").value) || 0,
+            distill_credit_cost: Number($("pfDistillCost").value) || 0,
+            distill_ticket_gift: Number($("pfDistillGift").value) || 0,
           };
           const key = $("pfKey").value.trim();
           if (key) payload.api_key = key;
@@ -1643,8 +1643,7 @@
             <div class="field"><label>徽标</label><input data-pkg-badge="${item.id}" value="${escapeHtml(item.badge || "")}" placeholder="可选" /></div>
           </div>
           <div class="form-grid" style="margin-top:0">
-            <div class="field"><label>赠送积分</label><input data-pkg-bonus-credits="${item.id}" type="number" min="0" value="${Number(item.bonus_credits) || 0}" /></div>
-            <div class="field"><label>赠送蒸馏券</label><input data-pkg-bonus-tickets="${item.id}" type="number" min="0" value="${Number(item.bonus_tickets) || 0}" /></div>
+            <div class="field full"><label>赠送积分</label><input data-pkg-bonus-credits="${item.id}" type="number" min="0" value="${Number(item.bonus_credits) || 0}" /></div>
           </div>
           <div class="pk-actions">
             <label class="switch" title="启用"><input type="checkbox" data-pkg-active="${item.id}" ${item.active ? "checked" : ""} /><span class="track"></span></label>
@@ -1788,9 +1787,8 @@
       const active = document.querySelector(`[data-pkg-active="${packageId}"]`).checked;
       const validity_days = Number(document.querySelector(`[data-pkg-days="${packageId}"]`).value) || 30;
       const bonus_credits = Number(document.querySelector(`[data-pkg-bonus-credits="${packageId}"]`).value) || 0;
-      const bonus_tickets = Number(document.querySelector(`[data-pkg-bonus-tickets="${packageId}"]`).value) || 0;
       try {
-        await api("/api/admin/packages", { method: "POST", body: JSON.stringify({ id: packageId, name, credits, coins, badge, sort: packageId, active, validity_days, bonus_credits, bonus_tickets }) });
+        await api("/api/admin/packages", { method: "POST", body: JSON.stringify({ id: packageId, name, credits, coins, badge, sort: packageId, active, validity_days, bonus_credits }) });
         toast("套餐已保存");
         await loadAll();
       } catch (error) { toast(error.message); }
@@ -1804,10 +1802,7 @@
           <div class="field"><label>定价(念念币)</label><input id="npkgCoins" type="number" min="0" value="180" /></div>
         </div>
         <div class="field"><label>有效期</label><select id="npkgDays">${validityOptions(90)}</select></div>
-        <div class="split">
-          <div class="field"><label>赠送积分</label><input id="npkgBonusCredits" type="number" min="0" value="0" /></div>
-          <div class="field"><label>赠送蒸馏券</label><input id="npkgBonusTickets" type="number" min="0" value="0" /></div>
-        </div>
+        <div class="field"><label>赠送积分</label><input id="npkgBonusCredits" type="number" min="0" value="0" /></div>
         <div class="field"><label>徽标</label><input id="npkgBadge" placeholder="可选" /></div>
         <div class="btnrow"><button class="btn primary" id="npkgOk" style="flex:1">创建</button></div>`, (body, mask) => {
         body.querySelector("#npkgOk").onclick = async () => {
@@ -1821,7 +1816,6 @@
                 badge: body.querySelector("#npkgBadge").value.trim(),
                 validity_days: Number(body.querySelector("#npkgDays").value) || 30,
                 bonus_credits: Number(body.querySelector("#npkgBonusCredits").value) || 0,
-                bonus_tickets: Number(body.querySelector("#npkgBonusTickets").value) || 0,
                 sort: 99, active: true,
               }),
             });

@@ -58,7 +58,7 @@
         <div id="dProgress"></div>
       </section>
 
-      <div class="mini" id="dTicketHint" style="text-align:center;margin:2px 0 10px">正在读取蒸馏券…</div>
+      <div class="mini" id="dTicketHint" style="text-align:center;margin:2px 0 10px">正在读取蒸馏积分…</div>
       <button class="btn primary wide" id="dSubmit">开始蒸馏</button>
     </div>
 
@@ -138,34 +138,36 @@
     $("bSubmit").onclick = createBlank;
     $("bName").addEventListener("keydown", (event) => { if (event.key === "Enter") createBlank(); });
 
-    let ticketBalance = null;
-    let ticketPrice = 0;
+    let creditBalance = null;
+    let distillCost = 0;
     function renderTicketHint() {
       const hint = $("dTicketHint");
       const button = $("dSubmit");
-      if (ticketBalance == null) { hint.textContent = ""; button.disabled = false; return; }
-      if (ticketBalance > 0) {
+      if (creditBalance == null) { hint.textContent = ""; button.disabled = false; return; }
+      if (distillCost <= 0) {
         button.disabled = false;
-        hint.innerHTML = `蒸馏券 <b>${ticketBalance}</b> 张 · 发起后先预扣 1 张，失败自动退还`;
+        hint.innerHTML = "本次蒸馏免费 · 失败自动退还";
+      } else if (creditBalance >= distillCost) {
+        button.disabled = false;
+        hint.innerHTML = `蒸馏消耗 <b>${distillCost}</b> 积分 · 当前 ${creditBalance} 积分，失败自动退还`;
       } else {
         button.disabled = true;
-        hint.innerHTML = '蒸馏券不足 · <a href="/app/settings" style="color:var(--v);font-weight:650">去购买</a>';
+        hint.innerHTML = `积分不足（需要 ${distillCost}，当前 ${creditBalance}）· <a href="/app/settings" style="color:var(--v);font-weight:650">去充值</a>`;
       }
     }
     async function loadTickets() {
       try {
         const credits = await api("/api/credits");
-        const info = credits.distill_tickets || {};
-        ticketBalance = Number(info.balance) || 0;
-        ticketPrice = Number(info.price) || 0;
-      } catch (error) { ticketBalance = null; }
+        creditBalance = Number(credits.balance) || 0;
+        distillCost = Number(credits.distill_credit_cost) || 0;
+      } catch (error) { creditBalance = null; }
       renderTicketHint();
     }
     function promptNoTicket(message) {
       openModal(
-        "蒸馏券不足",
-        `<div class="mini" style="margin-bottom:12px">${escapeHtml(message || (ticketPrice > 0 ? "每次蒸馏需要 1 张蒸馏券，单价 " + ticketPrice + " 念念币。" : "每次蒸馏需要 1 张蒸馏券。"))}</div>
-         <button class="btn primary wide" id="goTickets">前往购买</button>`,
+        "积分不足",
+        `<div class="mini" style="margin-bottom:12px">${escapeHtml(message || (distillCost > 0 ? "每次蒸馏需要 " + distillCost + " 积分。" : "积分不足。"))}</div>
+         <button class="btn primary wide" id="goTickets">前往充值</button>`,
       );
       $("goTickets").onclick = () => { window.location.href = "/app/settings"; };
     }
@@ -242,7 +244,9 @@
       const name = $("dName").value.trim();
       if (!name) { toast("请先给 ta 取个名字"); return; }
       if (!files.length) { toast("请先选择聊天记录文件"); return; }
-      if (ticketBalance === 0) { promptNoTicket(); return; }
+      if (creditBalance != null && distillCost > 0 && creditBalance < distillCost) {
+        promptNoTicket(); return;
+      }
       const form = new FormData();
       form.append("name", name);
       form.append("target", $("dTarget").value.trim());
@@ -264,9 +268,9 @@
         window.location.href = "/app/agent/" + created.persona.id;
       } catch (error) {
         const status = error.status || 0;
-        if (status === 402 || /蒸馏券/.test(error.message || "")) {
-          toast(error.message || "蒸馏券不足");
-          setProgress(error.message || "蒸馏券不足，请先购买", 0);
+        if (status === 402 || /积分不足/.test(error.message || "")) {
+          toast(error.message || "积分不足");
+          setProgress(error.message || "积分不足，请先充值", 0);
           $("dPercent").textContent = "失败";
           promptNoTicket(error.message);
           $("dSubmit").disabled = false;

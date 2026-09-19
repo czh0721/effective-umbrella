@@ -11,102 +11,108 @@ os.environ.setdefault("PERSONA_REGISTER_MAX", "1000")
 from ex_persona import store  # noqa: E402
 
 
-class DistillTicketTest(unittest.TestCase):
+class DistillCreditTest(unittest.TestCase):
     def setUp(self):
         store.init_db()
 
-    def _user(self, username, coins=0):
+    def _user(self, username, credits=0):
         user = store.create_user(username, "h", "s")
-        if coins:
-            store.grant_coins(user["id"], coins)
+        if credits:
+            store.grant_credits(user["id"], credits, reason="测试发放", source="gift")
         return user
+
+    def test_default_cost_is_100(self):
+        self.assertEqual(store.distill_credit_cost(), 100)
 
     def test_new_user_has_no_tickets_by_default(self):
         user = self._user("ticket-default")
         self.assertEqual(store.get_distill_tickets(user["id"]), 0)
 
-    def test_grant_and_deduct_tickets(self):
-        user = self._user("ticket-grant")
-        store.grant_distill_tickets(user["id"], 3, reason="管理员发放", actor="admin:x")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 3)
-        store.grant_distill_tickets(user["id"], -1, reason="管理员扣减", actor="admin:x")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 2)
-
-    def test_grant_ticket_below_zero_raises(self):
-        user = self._user("ticket-negative")
-        with self.assertRaises(store.InsufficientDistillTickets):
-            store.grant_distill_tickets(user["id"], -1)
-
-    def test_purchase_ticket_spends_coins(self):
-        user = self._user("ticket-buy", coins=500)
-        result = store.purchase_distill_ticket(user["id"], 2, idem="buy-1")
-        self.assertFalse(result["duplicate"])
-        self.assertEqual(store.get_distill_tickets(user["id"]), 2)
-        self.assertEqual(store.get_coins(user["id"]), 500 - result["spent"])
-        self.assertGreater(result["spent"], 0)
-
-    def test_purchase_ticket_idempotent(self):
-        user = self._user("ticket-buy-idem", coins=500)
-        first = store.purchase_distill_ticket(user["id"], 1, idem="same")
-        replay = store.purchase_distill_ticket(user["id"], 1, idem="same")
-        self.assertFalse(first["duplicate"])
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual(store.get_distill_tickets(user["id"]), 1)
-
-    def test_purchase_ticket_without_coins_rolls_back(self):
-        user = self._user("ticket-buy-poor", coins=0)
-        with self.assertRaises(store.InsufficientCoins):
-            store.purchase_distill_ticket(user["id"], 1)
-        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
-        self.assertEqual(store.get_coins(user["id"]), 0)
-
-    def test_reserve_requires_balance(self):
-        user = self._user("ticket-reserve-none")
-        with self.assertRaises(store.InsufficientDistillTickets):
-            store.reserve_distill_ticket(user["id"], "task-x")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
+    def test_reserve_requires_credits(self):
+        user = self._user("credit-reserve-none")
+        cost = store.distill_credit_cost()
+        with self.assertRaises(store.InsufficientCredits):
+            store.reserve_distill_credits(user["id"], "task-x")
+        self.assertEqual(store.get_credits(user["id"]), 0)
+        self.assertGreater(cost, 0)
 
     def test_reserve_then_refund(self):
-        user = self._user("ticket-refund")
-        store.grant_distill_tickets(user["id"], 1)
-        store.reserve_distill_ticket(user["id"], "task-1")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
-        store.refund_distill_ticket(user["id"], "task-1")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 1)
+        user = self._user("credit-refund", credits=500)
+        cost = store.distill_credit_cost()
+        store.reserve_distill_credits(user["id"], "task-1")
+        self.assertEqual(store.get_credits(user["id"]), 500 - cost)
+        store.refund_distill_credits(user["id"], "task-1")
+        self.assertEqual(store.get_credits(user["id"]), 500)
 
     def test_refund_is_idempotent(self):
-        user = self._user("ticket-refund-idem")
-        store.grant_distill_tickets(user["id"], 1)
-        store.reserve_distill_ticket(user["id"], "task-2")
-        first = store.refund_distill_ticket(user["id"], "task-2")
-        second = store.refund_distill_ticket(user["id"], "task-2")
+        user = self._user("credit-refund-idem", credits=500)
+        cost = store.distill_credit_cost()
+        store.reserve_distill_credits(user["id"], "task-2")
+        first = store.refund_distill_credits(user["id"], "task-2")
+        second = store.refund_distill_credits(user["id"], "task-2")
         self.assertFalse(first["duplicate"])
         self.assertTrue(second["duplicate"])
-        self.assertEqual(store.get_distill_tickets(user["id"]), 1)
-
-    def test_summary_counts_consumed(self):
-        user = self._user("ticket-summary", coins=500)
-        store.purchase_distill_ticket(user["id"], 2, idem="s1")
-        store.reserve_distill_ticket(user["id"], "t-ok")
-        store.reserve_distill_ticket(user["id"], "t-fail")
-        store.refund_distill_ticket(user["id"], "t-fail")
-        summary = store.distill_tickets_summary(user["id"])
-        self.assertEqual(summary["balance"], 1)
-        self.assertEqual(summary["purchased"], 2)
-        self.assertEqual(summary["consumed"], 1)
+        self.assertEqual(store.get_credits(user["id"]), 500)
+        self.assertEqual(first["amount"], cost)
 
     def test_reconcile_refunds_interrupted_task(self):
-        user = self._user("ticket-reconcile")
-        store.grant_distill_tickets(user["id"], 1)
+        user = self._user("credit-reconcile", credits=500)
+        cost = store.distill_credit_cost()
         store.create_task("task-stale", user["id"], None, "distill")
-        store.reserve_distill_ticket(user["id"], "task-stale")
-        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
-        result = store.reconcile_distill_tickets()
+        store.reserve_distill_credits(user["id"], "task-stale")
+        self.assertEqual(store.get_credits(user["id"]), 500 - cost)
+        result = store.reconcile_distill_credits()
         self.assertEqual(result["refunded"], 1)
-        self.assertEqual(store.get_distill_tickets(user["id"]), 1)
+        self.assertEqual(store.get_credits(user["id"]), 500)
         task = store.get_task("task-stale")
         self.assertEqual(task["status"], "error")
         self.assertEqual(task["error_kind"], "interrupted")
+
+    def _reset_migration(self):
+        with store.connect() as conn:
+            conn.execute("DELETE FROM schema_meta WHERE key = 'distill_credits_v1'")
+        store._initialized = False
+        store.init_db()
+
+    def test_migration_converts_ticket_balance_to_credits(self):
+        user = self._user("migrate-ticket")
+        store.grant_distill_tickets(user["id"], 3, reason="历史发放", actor="test")
+        with store.connect() as conn:
+            conn.execute("DELETE FROM credit_ledger WHERE user_id = ?", (user["id"],))
+            conn.execute("DELETE FROM credit_batches WHERE user_id = ?", (user["id"],))
+        self._reset_migration()
+        cost = store.distill_credit_cost()
+        self.assertEqual(store.get_credits(user["id"]), 3 * cost)
+        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
+        ledger = store.list_credit_ledger(user["id"], limit=5)
+        self.assertTrue(any(store.DISTILL_CONVERT_REASON in item["reason"] for item in ledger))
+
+    def test_migration_is_idempotent(self):
+        user = self._user("migrate-idem")
+        store.grant_distill_tickets(user["id"], 2, reason="历史发放", actor="test")
+        with store.connect() as conn:
+            conn.execute("DELETE FROM credit_ledger WHERE user_id = ?", (user["id"],))
+            conn.execute("DELETE FROM credit_batches WHERE user_id = ?", (user["id"],))
+        self._reset_migration()
+        cost = store.distill_credit_cost()
+        first = store.get_credits(user["id"])
+        self.assertEqual(first, 2 * cost)
+        store._initialized = False
+        store.init_db()
+        self.assertEqual(store.get_credits(user["id"]), first)
+
+    def test_migration_converts_package_bonus_tickets(self):
+        package = store.upsert_credit_package(
+            None, "迁移券包", 100, 0, "", 1, True, coins=10, validity_days=30,
+            bonus_credits=0, bonus_tickets=2,
+        )
+        self._reset_migration()
+        cost = store.distill_credit_cost()
+        updated = next(
+            p for p in store.list_credit_packages() if p["id"] == package["id"]
+        )
+        self.assertEqual(updated["bonus_tickets"], 0)
+        self.assertEqual(updated["bonus_credits"], 2 * cost)
 
 
 if __name__ == "__main__":

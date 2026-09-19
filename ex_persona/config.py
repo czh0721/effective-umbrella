@@ -39,9 +39,12 @@ class PlatformConfig:
     new_user_gift: int = 100
     # 非套餐发放（注册赠送、管理员默认）的积分有效期天数。
     default_credit_days: int = 30
-    # 单张蒸馏券的念念币价格；0 表示免费。
+    # 发起一次人格蒸馏预扣的积分数；0 表示免费。
+    distill_credit_cost: int = 100
+    # 单张蒸馏券的念念币价格；0 表示免费（历史字段，已不再用于计价）。
     distill_ticket_price: int = 60
     # 新用户注册赠送的蒸馏券数量；0 表示不赠送。
+    # 蒸馏券取消后，该数量按蒸馏积分单价折算为等值积分发放。
     distill_ticket_gift: int = 0
 
     @property
@@ -98,6 +101,8 @@ def load_platform_config() -> PlatformConfig:
         config.per_turn_cost = int(row.get("per_turn_cost") or 0)
         config.new_user_gift = int(row.get("new_user_gift") or 0)
         config.default_credit_days = int(row.get("default_credit_days") or 30)
+        cost = row.get("distill_credit_cost")
+        config.distill_credit_cost = int(cost) if cost not in (None, "") else 100
         config.distill_ticket_price = int(row.get("distill_ticket_price") or 0)
         config.distill_ticket_gift = int(row.get("distill_ticket_gift") or 0)
     return config

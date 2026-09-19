@@ -59,16 +59,14 @@ class PackageBonusTest(unittest.TestCase):
         self.assertEqual(batch["remaining"], 120)
         self.assertIn("赠送 20", batch["reason"])
 
-    def test_purchase_grants_bonus_tickets_without_expiry(self):
+    def test_purchase_does_not_grant_tickets(self):
+        # 蒸馏券已取消：套餐即使配置了 bonus_tickets，也不再发放蒸馏券。
         user = self._user("bonus-tickets", coins=500)
         package = self._package(name="季度福利包", validity_days=90, bonus_tickets=3)
         result = store.purchase_package(user["id"], package["id"])
-        self.assertEqual(result["bonus_tickets"], 3)
-        self.assertEqual(store.get_distill_tickets(user["id"]), 3)
-        ledger = store.list_distill_ticket_ledger(user["id"], limit=5)
-        self.assertEqual(ledger[0]["delta"], 3)
-        self.assertIn("套餐赠送", ledger[0]["reason"])
-        self.assertNotIn("expires_at", ledger[0])
+        self.assertEqual(result["bonus_tickets"], 0)
+        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
+        self.assertEqual(store.list_distill_ticket_ledger(user["id"], limit=5), [])
 
     def test_purchase_bonus_idempotent(self):
         user = self._user("bonus-idem", coins=500)
@@ -78,7 +76,7 @@ class PackageBonusTest(unittest.TestCase):
         self.assertFalse(first["duplicate"])
         self.assertTrue(replay["duplicate"])
         self.assertEqual(store.get_credits(user["id"]), 150)
-        self.assertEqual(store.get_distill_tickets(user["id"]), 1)
+        self.assertEqual(store.get_distill_tickets(user["id"]), 0)
 
     def test_admin_negative_bonus_rejected(self):
         with TestClient(app) as client:

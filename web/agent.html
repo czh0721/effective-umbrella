@@ -34,11 +34,11 @@
     function toastErr(error) {
       const message = error.message || String(error);
       toast(message);
-      if ((error.status || 0) === 402 || /蒸馏券/.test(message)) {
+      if ((error.status || 0) === 402 || /积分不足/.test(message)) {
         openModal(
-          "蒸馏券不足",
-          `<div class="mini" style="margin-bottom:12px">${escapeHtml(message || "每次蒸馏需要 1 张蒸馏券。")}</div>
-           <button class="btn primary wide" id="goTickets">前往购买</button>`,
+          "积分不足",
+          `<div class="mini" style="margin-bottom:12px">${escapeHtml(message || "蒸馏所需积分不足。")}</div>
+           <button class="btn primary wide" id="goTickets">前往充值</button>`,
         );
         $("goTickets").onclick = () => { window.location.href = "/app/settings"; };
       }
