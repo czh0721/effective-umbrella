@@ -76,5 +76,5 @@
 - 真实样本：iLink 下发编码为 `#!SILK_V3`（两条 5.83s + 6.49s）；在服务器编译 `kn007/silk-v3-decoder` 解码器并装到 `/opt/nian/bin/silk_v3_decoder`，`SILK_DECODER_BIN` 写入 `/opt/nian/.env`。
 - 转码链路：2 条 silk 经 `voice.build_clone_audio` 合并为 mp3，11.98s / 96KB / 24kHz 单声道，满足 MiniMax 克隆约束。
 - 测试：`python3 -m ruff check ex_persona tests` 全过；`python3 -m unittest discover -s tests` 490 全过；`python3 scripts/e2e/run_chain.py` 129/129。
-- 生产：新 weclaw 二进制装 `/opt/nian/bin/weclaw`（备份 `weclaw.bak.20260919_041433`），部署 `20260919_042641`；DB 含 `voice_samples`/`voice_clones` 与语音配置列。
+- 生产：新 weclaw 二进制装 `/opt/nian/bin/weclaw`（备份 `weclaw.bak.20260919_041433`），部署 `20260919_042641`（T1 数据层）、`20260919_044538`（语音全量）；DB 含 `voice_samples`/`voice_clones` 与语音配置列。
 - 待管理员在后台「语音设置」填入 MiniMax Key 并开启后，出站语音与克隆才会生效。
