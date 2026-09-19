@@ -85,5 +85,25 @@ class FrontendBackendContractTest(unittest.TestCase):
         return True
 
 
+class VoiceUiContractTest(unittest.TestCase):
+    def test_admin_voice_settings_present(self):
+        text = (WEB_ROOT / "admin.html").read_text(encoding="utf-8")
+        for marker in ("语音 MiniMax Key", "TTS 模型名", "音色克隆成本", "语音回复成本", "启用语音服务"):
+            self.assertIn(marker, text)
+
+    def test_agent_voice_panel_present(self):
+        text = (WEB_ROOT / "agent.html").read_text(encoding="utf-8")
+        for marker in ("克隆音色", "试听", "同意", "预设音色", "playVoicePreview"):
+            self.assertIn(marker, text)
+
+    def test_voice_module_uses_minimax_endpoints(self):
+        source = (
+            Path(__file__).resolve().parent.parent / "ex_persona" / "voice.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("t2a_v2", source)
+        self.assertIn("voice_clone", source)
+        self.assertIn("SILK", source)
+
+
 if __name__ == "__main__":
     unittest.main()

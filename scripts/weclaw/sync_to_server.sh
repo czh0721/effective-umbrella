@@ -13,7 +13,7 @@ DEST="/opt/nian/vendor/weclaw"
 for i in $(seq 1 20); do
   echo "=== attempt $i $(date +%H:%M:%S) ==="
   if ssh -o ConnectTimeout=30 "$HOST" "set -e; mkdir -p $DEST; if [ -x /opt/nian/bin/weclaw ]; then cp /opt/nian/bin/weclaw $DEST/weclaw-\$(date +%Y%m%d).bin; fi" \
-     && scp -o ConnectTimeout=30 -q "$HERE/nian.patch" "$HERE/zz_patch_test.go" "$HERE/build.sh" "$HOST:$DEST/" \
+     && scp -o ConnectTimeout=30 -q "$HERE/nian.patch" "$HERE/zz_patch_test.go" "$HERE/zz_voice_test.go" "$HERE/build.sh" "$HOST:$DEST/" \
      && ssh -o ConnectTimeout=30 "$HOST" "ls -la $DEST && echo WECLAW_ARCHIVED"; then
     exit 0
   fi

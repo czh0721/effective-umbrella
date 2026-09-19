@@ -11,10 +11,10 @@ index 6cdd694..6fff8fa 100644
  
  	data, err := json.Marshal(reqBody)
 diff --git a/cmd/start.go b/cmd/start.go
-index 48fc818..2377840 100644
+index 48fc818..c098b38 100644
 --- a/cmd/start.go
 +++ b/cmd/start.go
-@@ -138,6 +138,12 @@ func runStart(cmd *cobra.Command, args []string) error {
+@@ -138,6 +138,18 @@ func runStart(cmd *cobra.Command, args []string) error {
  		log.Printf("Image save directory: %s", cfg.SaveDir)
  	}
  
@@ -24,14 +24,20 @@ index 48fc818..2377840 100644
 +		log.Printf("Media endpoint: %s", cfg.MediaEndpoint)
 +	}
 +
++	// Forward incoming voice audio to a platform endpoint if configured
++	if cfg.VoiceEndpoint != "" {
++		handler.SetVoiceEndpoint(cfg.VoiceEndpoint)
++		log.Printf("Voice endpoint: %s", cfg.VoiceEndpoint)
++	}
++
  	// Start default agent initialization in background so monitors can start immediately
  	go func() {
  		if cfg.DefaultAgent == "" {
 diff --git a/config/config.go b/config/config.go
-index 53fc148..ba67990 100644
+index 53fc148..3cc1c58 100644
 --- a/config/config.go
 +++ b/config/config.go
-@@ -10,10 +10,11 @@ import (
+@@ -10,10 +10,12 @@ import (
  
  // Config holds the application configuration.
  type Config struct {
@@ -43,25 +49,29 @@ index 53fc148..ba67990 100644
 +	APIAddr       string                 `json:"api_addr,omitempty"`
 +	SaveDir       string                 `json:"save_dir,omitempty"`
 +	MediaEndpoint string                 `json:"media_endpoint,omitempty"`
++	VoiceEndpoint string                 `json:"voice_endpoint,omitempty"`
 +	Agents        map[string]AgentConfig `json:"agents"`
  }
  
  // AgentConfig holds configuration for a single agent.
-@@ -119,6 +120,9 @@ func loadEnv(cfg *Config) {
+@@ -119,6 +121,12 @@ func loadEnv(cfg *Config) {
  	if v := os.Getenv("WECLAW_SAVE_DIR"); v != "" {
  		cfg.SaveDir = v
  	}
 +	if v := os.Getenv("WECLAW_MEDIA_ENDPOINT"); v != "" {
 +		cfg.MediaEndpoint = v
 +	}
++	if v := os.Getenv("WECLAW_VOICE_ENDPOINT"); v != "" {
++		cfg.VoiceEndpoint = v
++	}
  }
  
  // Save saves the configuration to disk.
 diff --git a/messaging/handler.go b/messaging/handler.go
-index dcfee34..62a6eed 100644
+index dcfee34..a91066b 100644
 --- a/messaging/handler.go
 +++ b/messaging/handler.go
-@@ -1,9 +1,12 @@
+@@ -1,9 +1,13 @@
  package messaging
  
  import (
@@ -71,18 +81,20 @@ index dcfee34..62a6eed 100644
  	"log"
 +	"mime/multipart"
 +	"net/http"
++	"net/url"
  	"os"
  	"path/filepath"
  	"strings"
-@@ -41,6 +44,7 @@ type Handler struct {
+@@ -41,6 +45,8 @@ type Handler struct {
  	saveDefault   SaveDefaultFunc
  	contextTokens sync.Map   // map[userID]contextToken
  	saveDir       string     // directory to save images/files to
 +	mediaEndpoint string     // platform endpoint to forward incoming images/stickers to
++	voiceEndpoint string     // platform endpoint to forward incoming voice audio to
  	seenMsgs      sync.Map   // map[int64]time.Time — dedup by message_id
  }
  
-@@ -59,6 +63,12 @@ func (h *Handler) SetSaveDir(dir string) {
+@@ -59,6 +65,18 @@ func (h *Handler) SetSaveDir(dir string) {
  	h.saveDir = dir
  }
  
@@ -92,10 +104,33 @@ index dcfee34..62a6eed 100644
 +	h.mediaEndpoint = endpoint
 +}
 +
++// SetVoiceEndpoint sets the platform endpoint that receives incoming voice audio.
++// When set, raw voice audio is forwarded there for archiving and voice cloning.
++func (h *Handler) SetVoiceEndpoint(endpoint string) {
++	h.voiceEndpoint = endpoint
++}
++
  // cleanSeenMsgs removes entries older than 5 minutes from the dedup cache.
  func (h *Handler) cleanSeenMsgs() {
  	cutoff := time.Now().Add(-5 * time.Minute)
-@@ -287,12 +297,19 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
+@@ -279,20 +297,31 @@ func (h *Handler) HandleMessage(ctx context.Context, client *ilink.Client, msg i
+ 
+ 	// Extract text from item list (text message or voice transcription)
+ 	text := extractText(msg)
+-	if text == "" {
+-		if voiceText := extractVoiceText(msg); voiceText != "" {
+-			text = voiceText
+-			log.Printf("[handler] voice transcription from %s: %q", msg.FromUserID, truncate(text, 80))
+-		}
++	voice := extractVoice(msg)
++	if text == "" && voice != nil && voice.Text != "" {
++		text = voice.Text
++		log.Printf("[handler] voice transcription from %s: %q", msg.FromUserID, truncate(text, 80))
++	}
++	// Forward the raw voice audio (best effort) so the platform can archive the
++	// sample for voice cloning. Transcription text still drives the agent.
++	if voice != nil && h.voiceEndpoint != "" {
++		h.forwardVoice(ctx, msg, voice)
  	}
  	if text == "" {
  		// Check for image message
@@ -119,7 +154,7 @@ index dcfee34..62a6eed 100644
  	}
  
  	log.Printf("[handler] received from %s: %q", msg.FromUserID, truncate(text, 80))
-@@ -723,25 +740,77 @@ func extractVoiceText(msg ilink.WeixinMessage) string {
+@@ -723,25 +752,158 @@ func extractVoiceText(msg ilink.WeixinMessage) string {
  	return ""
  }
  
@@ -185,6 +220,87 @@ index dcfee34..62a6eed 100644
 +		return false
 +	}
 +	log.Printf("[handler] forwarded image from %s to platform (%d bytes)", msg.FromUserID, len(data))
++	return true
++}
++
++func extractVoice(msg ilink.WeixinMessage) *ilink.VoiceItem {
++	for _, item := range msg.ItemList {
++		if item.Type == ilink.ItemTypeVoice && item.VoiceItem != nil {
++			return item.VoiceItem
++		}
++	}
++	return nil
++}
++
++func downloadVoice(ctx context.Context, v *ilink.VoiceItem) ([]byte, error) {
++	if v.Media != nil && v.Media.EncryptQueryParam != "" {
++		return DownloadFileFromCDN(ctx, v.Media.EncryptQueryParam, v.Media.AESKey)
++	}
++	return nil, fmt.Errorf("voice has no media info")
++}
++
++// forwardVoice downloads an incoming voice message and POSTs the raw audio to the
++// configured platform voice endpoint so the bound persona can archive it. Returns
++// true when the endpoint accepted the upload. Failure never blocks the text flow.
++func (h *Handler) forwardVoice(ctx context.Context, msg ilink.WeixinMessage, v *ilink.VoiceItem) bool {
++	data, err := downloadVoice(ctx, v)
++	if err != nil {
++		log.Printf("[handler] failed to download voice from %s: %v", msg.FromUserID, err)
++		return false
++	}
++	fileName := "wechat-voice-" + time.Now().Format("20060102-150405") + ".bin"
++
++	var body bytes.Buffer
++	writer := multipart.NewWriter(&body)
++	part, err := writer.CreateFormFile("file", fileName)
++	if err != nil {
++		log.Printf("[handler] build voice form failed: %v", err)
++		return false
++	}
++	if _, err := part.Write(data); err != nil {
++		log.Printf("[handler] write voice form failed: %v", err)
++		return false
++	}
++	if err := writer.Close(); err != nil {
++		log.Printf("[handler] close voice form failed: %v", err)
++		return false
++	}
++
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.voiceEndpoint, &body)
++	if err != nil {
++		log.Printf("[handler] build voice request failed: %v", err)
++		return false
++	}
++	req.Header.Set("Content-Type", writer.FormDataContentType())
++	req.Header.Set("X-WeChat-From", msg.FromUserID)
++	if msg.MessageID != 0 {
++		req.Header.Set("X-WeChat-Message-ID", fmt.Sprintf("%d", msg.MessageID))
++	}
++	req.Header.Set("X-Voice-Duration-Ms", fmt.Sprintf("%d", v.Playtime))
++	if v.EncodeType != 0 {
++		req.Header.Set("X-Voice-Encode-Type", fmt.Sprintf("%d", v.EncodeType))
++	}
++	if v.Text != "" {
++		encoded := url.QueryEscape(v.Text)
++		if len(encoded) > 900 {
++			encoded = encoded[:900]
++		}
++		req.Header.Set("X-Voice-Transcript", encoded)
++	}
++
++	client := &http.Client{Timeout: 60 * time.Second}
++	resp, err := client.Do(req)
++	if err != nil {
++		log.Printf("[handler] forward voice to platform failed: %v", err)
++		return false
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
++		log.Printf("[handler] platform rejected voice: HTTP %d", resp.StatusCode)
++		return false
++	}
++	log.Printf("[handler] forwarded voice from %s to platform (%d bytes, encode=%d, playtime=%dms)",
++		msg.FromUserID, len(data), v.EncodeType, v.Playtime)
 +	return true
 +}
 +

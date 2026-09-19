@@ -11,3 +11,4 @@ data/platform.db
 data/platform.db-*
 data/.secret_key
 data/deleted/
+scripts/weclaw/weclaw

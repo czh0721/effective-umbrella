@@ -1,6 +1,7 @@
 """多用户平台后端：账号、人格、素材、模型配置、微信绑定与消息路由。"""
 
 import csv
+import hashlib
 import io
 import ipaddress
 import json
@@ -42,6 +43,7 @@ from . import (
     safety,
     scheduler,
     store,
+    voice,
     wechat,
     wechat_login,
     workspace,
@@ -68,6 +70,15 @@ RATE_LIMIT_PER_MINUTE = 90
 WATCHDOG_SECONDS = 30
 # weclaw 转发图片时使用的占位文本；是否回应由人格设置 reply_to_images 决定。
 IMAGE_PLACEHOLDER = "[图片]"
+# 语音样本上限：单条音频 5MB / 120 秒，超过直接拒绝，避免磁盘被刷。
+VOICE_SAMPLE_MAX_BYTES = 5 * 1024 * 1024
+VOICE_SAMPLE_MAX_MS = 120_000
+# 音色克隆门槛：MiniMax 要求单条样本 10 秒起，这里按联系人的样本累计时长判断。
+VOICE_CLONE_MIN_SECONDS = 10
+VOICE_PREVIEW_TEXT = "你好，我是你的念念。想你了，就来说说话吧。"
+# MiniMax 使用独立域名，与平台的 deepseek base_url 无关，允许环境变量覆盖。
+MINIMAX_BASE_URL = os.environ.get("PERSONA_MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")
+MINIMAX_GROUP_ID = os.environ.get("PERSONA_MINIMAX_GROUP_ID", "")
 # 单用户最多可创建的人格的 Agent 数量，防止刷资源。
 MAX_PERSONAS_PER_USER = 20
 # 单次积分/念念币调整与发放的上限，避免超大整数溢出或误操作。
@@ -236,6 +247,31 @@ def _save_upload_image(data: bytes, filename: str, directory: Path) -> tuple[Pat
     target = workspace.safe_join(directory, f"{uuid.uuid4().hex[:8]}-{stem}{_IMAGE_SUFFIX[mime]}")
     target.write_bytes(data)
     return target, display
+
+
+def _sniff_audio_ext(data: bytes) -> str:
+    """按文件头识别音频容器，返回扩展名；无法识别返回空串。"""
+    if data[:3] == b"ID3" or data[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2", b"\xff\xfa"):
+        return ".mp3"
+    if data.startswith((b"#!AMR", b"#!AMR-WB")):
+        return ".amr"
+    if data[:4] == b"RIFF" and data[8:12] == b"WAVE":
+        return ".wav"
+    if data[:4] == b"OggS":
+        return ".ogg"
+    if data[:4] == b"fLaC":
+        return ".flac"
+    if data[4:8] == b"ftyp":
+        return ".m4a"
+    if b"SILK" in data[:16]:
+        return ".silk"
+    return ""
+
+
+def _safe_contact(value: str) -> str:
+    """把微信联系人 id 收敛成安全的目录名。"""
+    cleaned = re.sub(r"[^A-Za-z0-9_.@-]", "_", (value or "").strip())
+    return (cleaned[:80] or "default")
 
 app = FastAPI(title="念念 Nian", version="0.2.0")
 (WEB_DIR / "static").mkdir(parents=True, exist_ok=True)
@@ -1276,6 +1312,20 @@ class PlatformConfigRequest(BaseModel):
     default_credit_days: int | None = None
     distill_credit_cost: int | None = None
     distill_ticket_price: int | None = None
+    minimax_api_key: str | None = None
+    voice_tts_model: str | None = None
+    voice_clone_cost: int | None = None
+    voice_reply_cost: int | None = None
+    voice_enabled: bool | None = None
+
+
+class VoiceCloneRequest(BaseModel):
+    contact: str = ""
+    consent: bool = False
+
+
+class VoicePreviewRequest(BaseModel):
+    voice_id: str = ""
 
 
 class CreditGrantRequest(BaseModel):
@@ -2330,6 +2380,62 @@ async def wechat_media(bridge_token: str, request: Request) -> dict:
     return {"ok": True, "persona_id": persona["id"], "sticker": dict(sticker)}
 
 
+@app.post("/api/wechat/voice/{bridge_token}")
+async def wechat_voice(bridge_token: str, request: Request) -> dict:
+    """微信桥接回调：把聊天框里收到的语音原始音频存为该联系人的语音样本。"""
+    if crypto.signed_bridge_token(bridge_token) and not crypto.verify_bridge_token(bridge_token):
+        raise HTTPException(status_code=401, detail="桥接令牌校验失败")
+    if _rate_limited(bridge_token):
+        raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
+    binding = store.get_binding_by_token(bridge_token)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="无效的桥接令牌")
+    user_id = binding["user_id"]
+    persona = store.get_persona(user_id, binding["persona_id"]) if binding.get("persona_id") else None
+    persona = persona or store.get_active_persona(user_id)
+    if persona is None:
+        raise HTTPException(status_code=400, detail="该用户尚未创建人格")
+
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="缺少语音文件")
+    data = await upload.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="空文件")
+    if len(data) > VOICE_SAMPLE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="语音文件过大")
+    ext = _sniff_audio_ext(data)
+    if not ext:
+        raise HTTPException(status_code=400, detail="只支持音频文件")
+
+    try:
+        duration_ms = int(request.headers.get("X-Voice-Duration-Ms") or 0)
+    except ValueError:
+        duration_ms = 0
+    if duration_ms > VOICE_SAMPLE_MAX_MS:
+        raise HTTPException(status_code=413, detail="语音过长")
+
+    contact = (request.headers.get("X-WeChat-From") or "").strip()
+    message_id = (request.headers.get("X-WeChat-Message-ID") or "").strip()
+    existing = store.get_voice_sample_by_message(persona["id"], message_id) if message_id else None
+    if existing is not None:
+        return {"ok": True, "sample_id": existing["id"], "duplicate": True}
+
+    directory = Path(persona["dir"]) / "voices" / _safe_contact(contact)
+    directory.mkdir(parents=True, exist_ok=True)
+    name = f"msg-{_safe_contact(message_id)}{ext}" if message_id else f"{uuid.uuid4().hex[:10]}{ext}"
+    target = workspace.safe_join(directory, name)
+    target.write_bytes(data)
+    sample = store.add_voice_sample(
+        user_id, persona["id"], contact, str(target), len(data), duration_ms, message_id
+    )
+    if contact:
+        store.update_persona(user_id, persona["id"], last_contact=contact)
+        store.touch_contact(user_id, persona["id"], contact)
+    return {"ok": True, "sample_id": (sample or {}).get("id", 0)}
+
+
 @app.get("/api/personas/{persona_id}/channel")
 def persona_channel(persona_id: int, user: dict = Depends(current_user)) -> dict:
     persona = _require_persona(user["id"], persona_id)
@@ -2342,6 +2448,287 @@ def set_channel_contact(persona_id: int, payload: dict, user: dict = Depends(cur
     contact = str(payload.get("contact") or "").strip()
     store.update_persona(user["id"], persona_id, last_contact=contact)
     return {"contact": contact}
+
+
+# --------------------------------------------------------------------------- #
+# 语音音色：样本状态、音色克隆与试听
+# --------------------------------------------------------------------------- #
+
+VOICE_PRESET_LABELS = {
+    "female-1": "少女音",
+    "female-2": "御姐音",
+    "male-1": "清朗男声",
+    "male-2": "沉稳男声",
+}
+
+
+def _persona_voice_detail(user_id: int, persona: dict, contact: str = "") -> dict:
+    platform = load_platform_config()
+    settings = persona_settings.load(persona.get("settings"))
+    voice_cfg = settings.get("voice") or {}
+    selected = (contact or voice_cfg.get("clone_contact") or "").strip()
+    summary = (
+        store.voice_sample_summary(user_id, persona["id"], selected)
+        if selected else {"count": 0, "duration_ms": 0, "seconds": 0.0}
+    )
+    clone = store.get_voice_clone(user_id, persona["id"], selected) if selected else None
+    return {
+        "preset": voice_cfg.get("preset") or voice_cfg.get("voice") or "female-1",
+        "presets": [
+            {"id": key, "label": VOICE_PRESET_LABELS.get(key, key)}
+            for key in voice.PRESET_VOICES
+        ],
+        "reply_voice": bool(settings["advanced"].get("reply_voice")),
+        "clone_status": voice_cfg.get("clone_status") or "none",
+        "clone_voice_id": voice_cfg.get("clone_voice_id") or "",
+        "clone_contact": voice_cfg.get("clone_contact") or "",
+        "contact": selected,
+        "sample_count": summary["count"],
+        "sample_seconds": summary["seconds"],
+        "min_seconds": VOICE_CLONE_MIN_SECONDS,
+        "clone_cost": platform.voice_clone_cost,
+        "reply_cost": platform.voice_reply_cost,
+        "ready": platform.voice_ready,
+        "key_ready": bool(platform.minimax_api_key),
+        "contacts": store.list_contacts(user_id, persona["id"]),
+        "clone": clone,
+        "ffmpeg_ready": voice.ffmpeg_available(),
+        "silk_ready": voice.silk_available(),
+    }
+
+
+def _set_persona_voice(user_id: int, persona: dict, **fields) -> dict:
+    fresh = store.get_persona(user_id, persona["id"]) or persona
+    settings = persona_settings.load(fresh.get("settings"))
+    settings.setdefault("voice", {}).update(fields)
+    settings = persona_settings.validate(settings)
+    store.update_persona(user_id, persona["id"], settings=persona_settings.dump(settings))
+    return settings
+
+
+def _start_voice_clone(
+    user_id: int,
+    persona_id: int,
+    contact: str,
+    sample_paths: list[str],
+    voice_id: str,
+    cost: int,
+    platform,
+) -> None:
+    thread = threading.Thread(
+        target=_voice_clone_task,
+        args=(user_id, persona_id, contact, sample_paths, voice_id, cost, platform),
+        name=f"voice-clone-{persona_id}-{contact[:8]}",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _voice_clone_task(user_id, persona_id, contact, sample_paths, voice_id, cost, platform) -> None:
+    persona = store.get_persona(user_id, persona_id)
+    try:
+        voice.minimax_clone(
+            sample_paths,
+            api_key=platform.minimax_api_key,
+            voice_id=voice_id,
+            base_url=MINIMAX_BASE_URL,
+            group_id=MINIMAX_GROUP_ID,
+        )
+    except Exception as error:  # noqa: BLE001 - 失败要退款并落库
+        if cost > 0:
+            try:
+                store.grant_credits(
+                    user_id, cost, reason="音色克隆失败退款", actor="system",
+                    ref=f"persona:{persona_id}",
+                )
+            except Exception:  # noqa: BLE001
+                log.warning("voice clone refund failed", extra={"event": "voice.clone_refund_fail"})
+        store.set_voice_clone_status(user_id, persona_id, contact, "failed", str(error))
+        if persona is not None:
+            _set_persona_voice(user_id, persona, clone_status="failed", clone_voice_id="")
+        observability.METRICS.inc("voice.clone_error")
+        log.warning(
+            "voice clone failed",
+            extra={"event": "voice.clone_error", "user_id": user_id, "error": str(error)},
+        )
+        _notify(user_id, "voice", "音色克隆失败，积分已退回，请稍后重试。")
+        return
+    store.set_voice_clone_status(user_id, persona_id, contact, "ready", voice_id=voice_id)
+    if persona is not None:
+        _set_persona_voice(
+            user_id, persona, clone_status="ready", clone_voice_id=voice_id, clone_contact=contact
+        )
+    observability.METRICS.inc("voice.clone_ok")
+    _notify(user_id, "voice", "音色克隆完成，已可以使用对方的声音回复。")
+
+
+def _voice_out_dir(persona: dict, contact: str) -> Path:
+    directory = Path(persona["dir"]) / "voice_out" / _safe_contact(contact)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _start_voice_reply(user_id: int, persona: dict, contact: str, reply: str) -> bool:
+    """文字回复之后，按需在后台合成一条语音回复。"""
+    if not contact or not reply.strip():
+        return False
+    platform = load_platform_config()
+    if not platform.voice_ready:
+        return False
+    thread = threading.Thread(
+        target=_voice_reply_task,
+        args=(user_id, persona["id"], contact, reply, platform),
+        name=f"voice-reply-{persona['id']}-{contact[:8]}",
+        daemon=True,
+    )
+    thread.start()
+    return True
+
+
+def _voice_reply_task(user_id: int, persona_id: int, contact: str, reply: str, platform) -> None:
+    persona = store.get_persona(user_id, persona_id)
+    if persona is None:
+        return
+    settings = persona_settings.load(persona.get("settings"))
+    voice_id, _ = voice.active_voice_id(settings)
+    try:
+        audio = voice.minimax_tts(
+            reply,
+            voice_id,
+            api_key=platform.minimax_api_key,
+            base_url=MINIMAX_BASE_URL,
+            model=platform.voice_tts_model,
+            group_id=MINIMAX_GROUP_ID,
+        )
+    except voice.VoiceError as error:
+        observability.METRICS.inc("voice.reply_error")
+        log.warning(
+            "voice reply synth failed",
+            extra={"event": "voice.reply_error", "user_id": user_id, "error": str(error)},
+        )
+        return
+    cost = int(platform.voice_reply_cost or 0)
+    if cost > 0:
+        try:
+            store.deduct_credits(
+                user_id, cost, reason=store.VOICE_REPLY_CHARGE_REASON, ref=f"persona:{persona_id}"
+            )
+        except store.InsufficientCredits:
+            observability.METRICS.inc("voice.reply_insufficient")
+            _notify(user_id, "credits", "积分不足，本次语音回复未发送。")
+            return
+    target = _voice_out_dir(persona, contact) / f"voice-{uuid.uuid4().hex[:12]}.mp3"
+    try:
+        target.write_bytes(audio)
+    except OSError:
+        log.warning("voice reply write failed", extra={"event": "voice.reply_write_fail"})
+        if cost > 0:
+            store.grant_credits(
+                user_id, cost, reason="语音回复发送失败退款", actor="system",
+                ref=f"persona:{persona_id}",
+            )
+        return
+    if not _outbox.enqueue(user_id, contact, media=str(target)):
+        if cost > 0:
+            store.grant_credits(
+                user_id, cost, reason="语音回复发送失败退款", actor="system",
+                ref=f"persona:{persona_id}",
+            )
+        return
+    observability.METRICS.inc("voice.reply_ok")
+    _record_send(user_id)
+
+
+@app.get("/api/personas/{persona_id}/voice")
+def get_persona_voice(
+    persona_id: int, contact: str = "", user: dict = Depends(current_user)
+) -> dict:
+    persona = _require_persona(user["id"], persona_id)
+    return _persona_voice_detail(user["id"], persona, contact.strip())
+
+
+@app.post("/api/personas/{persona_id}/voice/clone")
+def clone_persona_voice(
+    persona_id: int, payload: VoiceCloneRequest, user: dict = Depends(current_user)
+) -> dict:
+    persona = _require_persona(user["id"], persona_id)
+    platform = load_platform_config()
+    if not platform.voice_ready:
+        raise HTTPException(status_code=400, detail="平台未开启语音服务")
+    if not payload.consent:
+        raise HTTPException(status_code=400, detail="请先确认已获得声音权利人同意")
+    settings = persona_settings.load(persona.get("settings"))
+    contact = (payload.contact or settings["voice"].get("clone_contact") or "").strip()
+    if not contact:
+        raise HTTPException(status_code=400, detail="请先选择要克隆的联系人")
+    samples = store.list_voice_samples(user["id"], persona["id"], contact)
+    if not samples:
+        raise HTTPException(status_code=400, detail="还没有该联系人的语音样本")
+    summary = store.voice_sample_summary(user["id"], persona["id"], contact)
+    if summary["count"] and summary["duration_ms"] and summary["seconds"] < VOICE_CLONE_MIN_SECONDS:
+        raise HTTPException(
+            status_code=400, detail=f"语音样本不足，至少需要 {VOICE_CLONE_MIN_SECONDS} 秒"
+        )
+    existing = store.get_voice_clone(user["id"], persona["id"], contact)
+    if existing and existing.get("status") == "pending":
+        raise HTTPException(status_code=409, detail="音色克隆正在进行中，请稍候")
+    if not voice.ffmpeg_available():
+        raise HTTPException(status_code=400, detail="服务器缺少音频处理组件，暂时无法克隆")
+    cost = int(platform.voice_clone_cost or 0)
+    if cost > 0:
+        try:
+            store.deduct_credits(
+                user["id"], cost, reason=store.VOICE_CLONE_CHARGE_REASON, ref=f"persona:{persona['id']}"
+            )
+        except store.InsufficientCredits:
+            raise HTTPException(status_code=402, detail="积分不足，无法克隆音色") from None
+    voice_id = "nian" + hashlib.sha1(f"{persona['id']}:{contact}".encode()).hexdigest()[:16]
+    store.upsert_voice_clone(
+        user["id"], persona["id"], contact,
+        status="pending", voice_id=voice_id, sample_seconds=summary["seconds"],
+    )
+    _set_persona_voice(
+        user["id"], persona,
+        clone_status="pending", clone_voice_id=voice_id, clone_contact=contact,
+    )
+    _start_voice_clone(
+        user["id"], persona["id"], contact,
+        [item["path"] for item in samples], voice_id, cost, platform,
+    )
+    observability.METRICS.inc("voice.clone_start")
+    return {"clone_status": "pending", "voice_id": voice_id, "cost": cost}
+
+
+@app.post("/api/personas/{persona_id}/voice/preview")
+def preview_persona_voice(
+    persona_id: int, payload: VoicePreviewRequest, user: dict = Depends(current_user)
+) -> Response:
+    persona = _require_persona(user["id"], persona_id)
+    platform = load_platform_config()
+    if not platform.minimax_api_key:
+        raise HTTPException(status_code=400, detail="平台未配置语音服务")
+    settings = persona_settings.load(persona.get("settings"))
+    requested = (payload.voice_id or "").strip()
+    clone_id = str(settings["voice"].get("clone_voice_id") or "")
+    allowed = set(voice.PRESET_VOICES.values())
+    if clone_id and settings["voice"].get("clone_status") == "ready":
+        allowed.add(clone_id)
+    if requested and requested in allowed:
+        voice_id = requested
+    else:
+        voice_id, _ = voice.active_voice_id(settings)
+    try:
+        audio = voice.minimax_tts(
+            VOICE_PREVIEW_TEXT, voice_id,
+            api_key=platform.minimax_api_key,
+            base_url=MINIMAX_BASE_URL,
+            model=platform.voice_tts_model,
+            group_id=MINIMAX_GROUP_ID,
+        )
+    except voice.VoiceError as error:
+        status = 400 if error.auth else 502
+        raise HTTPException(status_code=status, detail=f"试听失败：{error}") from error
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 # --------------------------------------------------------------------------- #
@@ -3600,6 +3987,10 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
     if insufficient:
         return _completion(request, reply)
 
+    # 语音回复：在分段之前用完整文案合成，避免只念出第一段。
+    if fresh and contact and reply and settings["advanced"].get("reply_voice"):
+        _start_voice_reply(user_id, persona, contact, reply)
+
     # 真人感：把长回复拆成几条短消息，首条随本次响应返回，其余按打字节奏入队。
     # 先算出首条的拟人等待时间，作为后续分段的排队基准，保证到达顺序与生成顺序一致。
     lead_delay = _reply_delay_seconds(reply, settings) if reply else 0.0
@@ -4676,6 +5067,17 @@ def admin_get_platform(admin: dict = Depends(current_admin)) -> dict:
         "has_key": bool(row.get("api_key_encrypted")),
         "api_key_masked": crypto.mask(platform.api_key) if platform.api_key else "",
         "daily_limit": platform.daily_limit,
+        "voice_enabled": platform.voice_enabled,
+        "voice_tts_model": platform.voice_tts_model,
+        "voice_clone_cost": platform.voice_clone_cost,
+        "voice_reply_cost": platform.voice_reply_cost,
+        "has_voice_key": bool(row.get("minimax_api_key_encrypted")),
+        "voice_key_masked": crypto.mask(platform.minimax_api_key) if platform.minimax_api_key else "",
+        "voice_ready": platform.voice_ready,
+        "voice_usage": {
+            "clones": store.count_voice_clones(status=""),
+            "replies": store.count_voice_replies(),
+        },
     }
 
 
@@ -4720,12 +5122,28 @@ def admin_set_platform(
         distill_ticket_price=distill_ticket_price,
         # 「注册赠送蒸馏次数」已并入 new_user_gift，这里固定归零以保持退役状态。
         distill_ticket_gift=0,
+        minimax_api_key_encrypted=(
+            crypto.encrypt(payload.minimax_api_key.strip())
+            if payload.minimax_api_key is not None and payload.minimax_api_key.strip()
+            else None
+        ),
+        voice_tts_model=payload.voice_tts_model,
+        voice_clone_cost=(
+            max(int(payload.voice_clone_cost), 0)
+            if payload.voice_clone_cost is not None else None
+        ),
+        voice_reply_cost=(
+            max(int(payload.voice_reply_cost), 0)
+            if payload.voice_reply_cost is not None else None
+        ),
+        voice_enabled=payload.voice_enabled,
     )
     _agents.clear()
     _audit(
         admin, "platform.update",
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
-                f" days={default_credit_days} distill={distill_credit_cost}"),
+                f" days={default_credit_days} distill={distill_credit_cost}"
+                f" voice_enabled={payload.voice_enabled}"),
     )
     return admin_get_platform(admin)
 

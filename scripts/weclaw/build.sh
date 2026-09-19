@@ -22,6 +22,7 @@ cd "$SRC"
 git checkout -- .
 git apply "$HERE/nian.patch"
 cp "$HERE/zz_patch_test.go" agent/zz_patch_test.go
+cp "$HERE/zz_voice_test.go" messaging/zz_voice_test.go
 
 go build -o "$OUT" .
 echo "built $OUT"

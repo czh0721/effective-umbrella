@@ -78,6 +78,8 @@ Entries discovered by the Agent during task execution should follow this format:
   - 补丁校验：`cd /tmp/opencode/weclaw-src && go test ./agent/ -run TestHTTPAgentSendsUser`，确认请求体带 `user`。
   - 同一份补丁新增：`config.Config.MediaEndpoint`（config key `media_endpoint`，env `WECLAW_MEDIA_ENDPOINT`）与 `messaging.Handler.SetMediaEndpoint`；收到图片/表情时由 `forwardImage` 以 multipart POST 到该端点（带 `X-WeChat-From` 头），平台 `POST /api/wechat/media/{bridge_token}` 保存为该人格的表情包。平台在 `wechat.py ensure_config` 自动写入该字段。
   - 追加补丁（2026-09-13）：`messaging/sender.go` 的 `SendTextReply` 在纯文本为空时直接返回，使平台只发表情不附文字时不产生空气泡；`messaging/handler.go` 图片分支转发成功后不再 return，而是以占位文本 `[图片]` 继续走 agent，由平台按人格设置 `advanced.reply_to_images` 决定是否回应（默认静默）。
+  - 追加补丁（2026-09-19）：`config.Config.VoiceEndpoint`（config key `voice_endpoint`，env `WECLAW_VOICE_ENDPOINT`）与 `messaging.Handler.SetVoiceEndpoint`；收到语音时 `forwardVoice` 把原始音频 multipart POST 到该端点，平台 `POST /api/wechat/voice/{bridge_token}` 存档为音色克隆样本。相关文件：`/workspace/scripts/weclaw/{nian.patch,build.sh,sync_to_server.sh,zz_voice_test.go}`。
+  - weclaw 只在进程启动时读取一次配置：`ensure_config` 写入 `voice_endpoint`/`media_endpoint` 后，必须重启转发进程（`systemctl restart nian`，或 UI 停止后重新开始）才会生效，否则已运行的 bridge 仍用旧配置。
   - 编译类命令必须走 background terminal，不要用前台 bash 直接构建。
 
 [Project Knowledge Summary]

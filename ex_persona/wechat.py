@@ -192,6 +192,10 @@ class WeChatBridge:
         config["media_endpoint"] = (
             f"http://127.0.0.1:{self.port}/api/wechat/media/{bridge_token}"
         )
+        # 收到语音时额外把原始音频回调本端点存档，用于音色克隆。
+        config["voice_endpoint"] = (
+            f"http://127.0.0.1:{self.port}/api/wechat/voice/{bridge_token}"
+        )
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(config, indent=2, ensure_ascii=False) + "\n"
         with self._cfg_lock:

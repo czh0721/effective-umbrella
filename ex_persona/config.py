@@ -46,10 +46,23 @@ class PlatformConfig:
     # 历史字段（已退役）：原「注册赠送蒸馏次数」。
     # 蒸馏券取消后已并入 new_user_gift，保留列以兼容历史数据与迁移幂等。
     distill_ticket_gift: int = 0
+    # 语音能力：MiniMax Key 由管理员配置，供 TTS 与音色克隆统一使用。
+    minimax_api_key: str = ""
+    voice_tts_model: str = "speech-02-turbo"
+    # 音色克隆一次扣减的积分；0 表示免费。
+    voice_clone_cost: int = 500
+    # 每条语音回复在基础每轮扣费之外额外扣减的积分；0 表示免费。
+    voice_reply_cost: int = 20
+    # 是否启用平台的语音合成与克隆能力。
+    voice_enabled: bool = False
 
     @property
     def ready(self) -> bool:
         return bool(self.api_key) and self.enabled
+
+    @property
+    def voice_ready(self) -> bool:
+        return bool(self.minimax_api_key) and self.voice_enabled
 
 
 def load_llm_config() -> LLMConfig:
@@ -75,6 +88,7 @@ def load_platform_config() -> PlatformConfig:
     if load_dotenv is not None:
         load_dotenv()
     env_key = (os.getenv("PERSONA_PLATFORM_API_KEY") or "").strip()
+    env_voice_key = (os.getenv("PERSONA_MINIMAX_API_KEY") or "").strip()
     try:
         daily_limit = int(os.getenv("PERSONA_PLATFORM_DAILY_LIMIT") or "0")
     except ValueError:
@@ -85,6 +99,8 @@ def load_platform_config() -> PlatformConfig:
         model=(os.getenv("PERSONA_PLATFORM_MODEL") or "deepseek-chat").strip(),
         daily_limit=max(daily_limit, 0),
         enabled=bool(env_key),
+        minimax_api_key=env_voice_key,
+        voice_enabled=bool(env_voice_key),
     )
     try:
         from . import crypto, store
@@ -105,4 +121,17 @@ def load_platform_config() -> PlatformConfig:
         config.distill_credit_cost = int(cost) if cost not in (None, "") else 100
         config.distill_ticket_price = int(row.get("distill_ticket_price") or 0)
         config.distill_ticket_gift = int(row.get("distill_ticket_gift") or 0)
+        voice_encrypted = row.get("minimax_api_key_encrypted") or ""
+        if voice_encrypted:
+            config.minimax_api_key = crypto.decrypt(voice_encrypted)
+        config.voice_tts_model = row.get("voice_tts_model") or config.voice_tts_model
+        clone_cost = row.get("voice_clone_cost")
+        config.voice_clone_cost = int(clone_cost) if clone_cost not in (None, "") else 500
+        reply_cost = row.get("voice_reply_cost")
+        config.voice_reply_cost = int(reply_cost) if reply_cost not in (None, "") else 20
+        config.voice_enabled = bool(row.get("voice_enabled"))
+    if not config.minimax_api_key and env_voice_key:
+        config.minimax_api_key = env_voice_key
+    if config.minimax_api_key and row is None:
+        config.voice_enabled = True
     return config

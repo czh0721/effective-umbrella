@@ -414,6 +414,37 @@ function compressAvatarFile(file, size = 256) {
   });
 }
 
+/* --------------------------------------------------------- voice -- */
+let _voiceAudio = null;
+
+function playVoiceBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    if (_voiceAudio) { try { _voiceAudio.pause(); } catch (error) { /* 忽略旧音频暂停失败 */ } }
+    _voiceAudio = audio;
+    audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+    audio.onerror = () => { URL.revokeObjectURL(url); reject(new Error("音频播放失败")); };
+    const started = audio.play();
+    if (started && started.catch) started.catch(reject);
+  });
+}
+
+async function playVoicePreview(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(body || {}),
+  });
+  if (!response.ok) {
+    let message = "试听失败";
+    try { const data = await response.json(); message = data.detail || message; } catch (error) { /* 非 JSON 错误体 */ }
+    throw new Error(message);
+  }
+  return playVoiceBlob(await response.blob());
+}
+
 /* --------------------------------------------------------- modal/sheet -- */
 function focusFirst(mask) {
   const items = focusableItems(mask);

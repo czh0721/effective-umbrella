@@ -466,6 +466,36 @@ CREATE TABLE IF NOT EXISTS admin_notices (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_admin_notices_created ON admin_notices(created_at);
+
+CREATE TABLE IF NOT EXISTS voice_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    persona_id INTEGER NOT NULL,
+    contact TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    source_message_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    UNIQUE(persona_id, source_message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_voice_samples_contact
+    ON voice_samples(persona_id, contact, created_at);
+
+CREATE TABLE IF NOT EXISTS voice_clones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    persona_id INTEGER NOT NULL,
+    contact TEXT NOT NULL DEFAULT '',
+    provider TEXT NOT NULL DEFAULT 'minimax',
+    voice_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    error TEXT NOT NULL DEFAULT '',
+    sample_seconds REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(persona_id, contact)
+);
 """
 
 _PERSONA_COLUMNS = {
@@ -540,6 +570,11 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "distill_credit_cost": "INTEGER NOT NULL DEFAULT 100",
         "distill_ticket_price": "INTEGER NOT NULL DEFAULT 60",
         "distill_ticket_gift": "INTEGER NOT NULL DEFAULT 0",
+        "minimax_api_key_encrypted": "TEXT NOT NULL DEFAULT ''",
+        "voice_tts_model": "TEXT NOT NULL DEFAULT 'speech-02-turbo'",
+        "voice_clone_cost": "INTEGER NOT NULL DEFAULT 500",
+        "voice_reply_cost": "INTEGER NOT NULL DEFAULT 20",
+        "voice_enabled": "INTEGER NOT NULL DEFAULT 0",
     },
     "proactive_log": {"kind": "TEXT NOT NULL DEFAULT ''"},
 }
@@ -3608,6 +3643,187 @@ def delete_sticker(user_id: int, persona_id: int, sticker_id: int) -> dict | Non
     return sticker if cursor.rowcount > 0 else None
 
 
+# --------------------------------------------------------------------------- #
+# 语音样本与音色克隆
+# --------------------------------------------------------------------------- #
+
+VOICE_SAMPLE_KEEP = 20
+VOICE_CLONE_STATUSES = ("pending", "ready", "failed")
+# 语音回复与音色克隆的积分流水原因，后台用量统计也据此归类。
+VOICE_REPLY_CHARGE_REASON = "语音回复扣费"
+VOICE_CLONE_CHARGE_REASON = "音色克隆扣费"
+
+
+def get_voice_sample_by_message(persona_id: int, source_message_id: str) -> dict | None:
+    _ensure()
+    if not source_message_id:
+        return None
+    with connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM voice_samples WHERE persona_id = ? AND source_message_id = ?",
+            (persona_id, source_message_id),
+        ).fetchone())
+
+
+def add_voice_sample(
+    user_id: int,
+    persona_id: int,
+    contact: str,
+    path: str,
+    bytes_: int,
+    duration_ms: int,
+    source_message_id: str,
+) -> dict | None:
+    """写入一条语音样本；同一来源消息 ID 幂等复用（返回已有行）。"""
+    _ensure()
+    if source_message_id:
+        existing = get_voice_sample_by_message(persona_id, source_message_id)
+        if existing is not None:
+            return existing
+    with _lock, connect() as conn:
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO voice_samples (user_id, persona_id, contact, path, bytes,"
+            " duration_ms, source_message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (user_id, persona_id, contact, path, max(int(bytes_), 0), max(int(duration_ms), 0),
+             source_message_id, utcnow()),
+        )
+        new_id = cursor.lastrowid
+        if cursor.rowcount == 0:
+            return get_voice_sample_by_message(persona_id, source_message_id)
+    prune_voice_samples(user_id, persona_id, contact)
+    with connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM voice_samples WHERE id = ?", (new_id,)
+        ).fetchone())
+
+
+def list_voice_samples(user_id: int, persona_id: int, contact: str = "") -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        if contact:
+            rows = conn.execute(
+                "SELECT * FROM voice_samples WHERE user_id = ? AND persona_id = ? AND contact = ?"
+                " ORDER BY id DESC",
+                (user_id, persona_id, contact),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM voice_samples WHERE user_id = ? AND persona_id = ? ORDER BY id DESC",
+                (user_id, persona_id),
+            ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def voice_sample_summary(user_id: int, persona_id: int, contact: str = "") -> dict:
+    """返回样本条数与累计时长（秒），供克隆门槛与前端展示。"""
+    samples = list_voice_samples(user_id, persona_id, contact)
+    total_ms = sum(int(item.get("duration_ms") or 0) for item in samples)
+    return {"count": len(samples), "duration_ms": total_ms, "seconds": round(total_ms / 1000, 1)}
+
+
+def prune_voice_samples(user_id: int, persona_id: int, contact: str, keep: int = VOICE_SAMPLE_KEEP) -> None:
+    """每个联系人只保留最新 ``keep`` 条记录；磁盘文件保留，不参与计数。"""
+    _ensure()
+    with _lock, connect() as conn:
+        conn.execute(
+            "DELETE FROM voice_samples WHERE persona_id = ? AND contact = ? AND id NOT IN ("
+            "  SELECT id FROM voice_samples WHERE persona_id = ? AND contact = ?"
+            "  ORDER BY id DESC LIMIT ?)",
+            (persona_id, contact, persona_id, contact, max(int(keep), 1)),
+        )
+
+
+def get_voice_clone(user_id: int, persona_id: int, contact: str) -> dict | None:
+    _ensure()
+    with connect() as conn:
+        return _row(conn.execute(
+            "SELECT * FROM voice_clones WHERE user_id = ? AND persona_id = ? AND contact = ?",
+            (user_id, persona_id, contact),
+        ).fetchone())
+
+
+def list_voice_clones(user_id: int, persona_id: int) -> list[dict]:
+    _ensure()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM voice_clones WHERE user_id = ? AND persona_id = ? ORDER BY id DESC",
+            (user_id, persona_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_voice_clone(
+    user_id: int,
+    persona_id: int,
+    contact: str,
+    *,
+    status: str = "pending",
+    voice_id: str = "",
+    error: str = "",
+    sample_seconds: float = 0.0,
+) -> dict:
+    _ensure()
+    if status not in VOICE_CLONE_STATUSES:
+        status = "pending"
+    now = utcnow()
+    with _lock, connect() as conn:
+        conn.execute(
+            "INSERT INTO voice_clones (user_id, persona_id, contact, provider, voice_id, status,"
+            " error, sample_seconds, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'minimax', ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(persona_id, contact) DO UPDATE SET status = excluded.status,"
+            " voice_id = excluded.voice_id, error = excluded.error,"
+            " sample_seconds = excluded.sample_seconds, updated_at = excluded.updated_at",
+            (user_id, persona_id, contact, voice_id, status, error, float(sample_seconds), now, now),
+        )
+    return get_voice_clone(user_id, persona_id, contact) or {}
+
+
+def set_voice_clone_status(
+    user_id: int, persona_id: int, contact: str, status: str, error: str = "", voice_id: str | None = None
+) -> dict:
+    _ensure()
+    if status not in VOICE_CLONE_STATUSES:
+        status = "pending"
+    with _lock, connect() as conn:
+        if voice_id is None:
+            conn.execute(
+                "UPDATE voice_clones SET status = ?, error = ?, updated_at = ?"
+                " WHERE user_id = ? AND persona_id = ? AND contact = ?",
+                (status, error, utcnow(), user_id, persona_id, contact),
+            )
+        else:
+            conn.execute(
+                "UPDATE voice_clones SET status = ?, error = ?, voice_id = ?, updated_at = ?"
+                " WHERE user_id = ? AND persona_id = ? AND contact = ?",
+                (status, error, voice_id, utcnow(), user_id, persona_id, contact),
+            )
+    return get_voice_clone(user_id, persona_id, contact) or {}
+
+
+def count_voice_clones(status: str = "ready") -> int:
+    _ensure()
+    with connect() as conn:
+        if status:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM voice_clones WHERE status = ?", (status,)
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT COUNT(*) AS n FROM voice_clones").fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
+def count_voice_replies() -> int:
+    """统计语音回复扣费笔数，供后台用量区展示。"""
+    _ensure()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM credit_ledger WHERE reason = ?",
+            (VOICE_REPLY_CHARGE_REASON,),
+        ).fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
 def add_moment(
     user_id: int, persona_id: int, content: str, sticker_id: int = 0, source: str = "auto"
 ) -> dict:
@@ -4586,6 +4802,11 @@ def set_platform_config(
     distill_credit_cost: int | None = None,
     distill_ticket_price: int | None = None,
     distill_ticket_gift: int | None = None,
+    minimax_api_key_encrypted: str | None = None,
+    voice_tts_model: str | None = None,
+    voice_clone_cost: int | None = None,
+    voice_reply_cost: int | None = None,
+    voice_enabled: bool | None = None,
 ) -> dict:
     _ensure()
     current = get_platform_config_row() or {}
@@ -4605,12 +4826,32 @@ def set_platform_config(
         distill_ticket_gift if distill_ticket_gift is not None
         else current.get("distill_ticket_gift", 0) or 0
     ), 0)
+    voice_key = (minimax_api_key_encrypted if minimax_api_key_encrypted is not None
+                 else current.get("minimax_api_key_encrypted") or "")
+    voice_model = (
+        (voice_tts_model or "").strip()
+        if voice_tts_model is not None
+        else (current.get("voice_tts_model") or "")
+    ) or "speech-02-turbo"
+    clone_cost = max(int(
+        voice_clone_cost if voice_clone_cost is not None
+        else current.get("voice_clone_cost", 500) or 0
+    ), 0)
+    reply_cost = max(int(
+        voice_reply_cost if voice_reply_cost is not None
+        else current.get("voice_reply_cost", 20) or 0
+    ), 0)
+    voice_on = (
+        bool(voice_enabled) if voice_enabled is not None
+        else bool(current.get("voice_enabled"))
+    )
     with _lock, connect() as conn:
         conn.execute(
             "INSERT INTO platform_config (id, api_key_encrypted, base_url, model, enabled,"
             " per_turn_cost, new_user_gift, default_credit_days, distill_credit_cost,"
-            " distill_ticket_price, distill_ticket_gift, updated_at)"
-            " VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " distill_ticket_price, distill_ticket_gift, minimax_api_key_encrypted,"
+            " voice_tts_model, voice_clone_cost, voice_reply_cost, voice_enabled, updated_at)"
+            " VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT(id) DO UPDATE SET api_key_encrypted = excluded.api_key_encrypted,"
             " base_url = excluded.base_url, model = excluded.model, enabled = excluded.enabled,"
             " per_turn_cost = excluded.per_turn_cost, new_user_gift = excluded.new_user_gift,"
@@ -4618,10 +4859,16 @@ def set_platform_config(
             " distill_credit_cost = excluded.distill_credit_cost,"
             " distill_ticket_price = excluded.distill_ticket_price,"
             " distill_ticket_gift = excluded.distill_ticket_gift,"
+            " minimax_api_key_encrypted = excluded.minimax_api_key_encrypted,"
+            " voice_tts_model = excluded.voice_tts_model,"
+            " voice_clone_cost = excluded.voice_clone_cost,"
+            " voice_reply_cost = excluded.voice_reply_cost,"
+            " voice_enabled = excluded.voice_enabled,"
             " updated_at = excluded.updated_at",
             (api_key_encrypted, base_url, model, 1 if enabled else 0,
              int(per_turn_cost), int(new_user_gift), days, credit_cost, ticket_price,
-             ticket_gift, utcnow()),
+             ticket_gift, voice_key, voice_model, clone_cost, reply_cost,
+             1 if voice_on else 0, utcnow()),
         )
     return get_platform_config_row() or {}
 

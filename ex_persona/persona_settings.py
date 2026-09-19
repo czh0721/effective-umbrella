@@ -59,6 +59,10 @@ DEFAULT_SETTINGS: dict = {
         "asr": False,
         "tts": False,
         "voice": "female-1",
+        "preset": "female-1",
+        "clone_voice_id": "",
+        "clone_status": "none",
+        "clone_contact": "",
     },
     "model": {
         "provider": "system",
@@ -93,6 +97,8 @@ LEGACY_MEMORY_MODES = {"full": "standard", "recent": "saver"}
 PROVIDERS = {"system", "kimi", "minimax", "deepseek"}
 PROACTIVE_MODES = {"interval", "smart"}
 SENSITIVE_ACTIONS = {"replace", "drop"}
+VOICE_PRESETS = ("female-1", "female-2", "male-1", "male-2")
+VOICE_CLONE_STATUSES = {"none", "pending", "ready", "failed"}
 NODE_KINDS = ("morning", "goodnight", "anniversary", "care")
 NODE_LABELS = {
     "morning": "早安问候",
@@ -211,6 +217,22 @@ def validate(settings: dict) -> dict:
     advanced["merge_seconds"] = min(max(merge_seconds, 0), 60)
     advanced["split_replies"] = bool(advanced.get("split_replies", True))
     advanced["max_segments"] = _int_range(advanced.get("max_segments"), 3, 1, 4)
+    advanced["reply_voice"] = bool(advanced.get("reply_voice", False))
+
+    voice = settings.setdefault("voice", {})
+    preset = voice.get("preset") or voice.get("voice") or "female-1"
+    if preset not in VOICE_PRESETS:
+        preset = "female-1"
+    voice["voice"] = preset
+    voice["preset"] = preset
+    status = voice.get("clone_status")
+    if status not in VOICE_CLONE_STATUSES:
+        status = "none"
+    voice["clone_status"] = status
+    voice["clone_voice_id"] = str(voice.get("clone_voice_id") or "")[:120]
+    voice["clone_contact"] = str(voice.get("clone_contact") or "")[:200]
+    voice["asr"] = bool(voice.get("asr", False))
+    voice["tts"] = bool(voice.get("tts", False))
 
     tuning = settings.setdefault("tuning", {})
     tuning["verbosity"] = _int_range(tuning.get("verbosity"), 50, 0, 100)

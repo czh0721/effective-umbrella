@@ -159,7 +159,7 @@
             ${row("tuning", "sliders", "人格调校", tuningText, "var(--pink)")}
             ${row("advanced", "sliders", "消息与回复", "合并 · 分段 · 输入中 · 沉默", "#8e8e99")}
             ${row("stickers", "sticker", "图片表情包", (detail.stickers || []).length ? `${detail.stickers.length} 个` : "还没有表情包", "var(--v2)")}
-            ${row("voice", "mic", "语音", (voice.asr || voice.tts) ? "已开启" : "未开启", "var(--blue)")}
+            ${row("voice", "mic", "语音", (s.advanced || {}).reply_voice ? "语音回复已开启" : "未开启", "var(--blue)")}
           </div>
         </section>
 
@@ -1097,23 +1097,74 @@
         });
     }
 
-    function openVoice() {
-      const v = detail.settings.voice;
+    async function openVoice() {
+      let info = null;
+      try { info = await api(`/api/personas/${personaId}/voice`); } catch (error) { info = null; }
+      const v = (detail.settings && detail.settings.voice) || {};
+      const a = (detail.settings && detail.settings.advanced) || {};
+      const preset = info ? info.preset : (v.preset || v.voice || "female-1");
+      const presets = (info && info.presets) || [
+        { id: "female-1", label: "少女音" }, { id: "female-2", label: "御姐音" },
+        { id: "male-1", label: "清朗男声" }, { id: "male-2", label: "沉稳男声" },
+      ];
+      const contacts = (info && info.contacts) || [];
+      const cloneStatus = info ? info.clone_status : (v.clone_status || "none");
+      const statusText = { none: "未克隆", pending: "克隆中", ready: "已就绪", failed: "克隆失败" }[cloneStatus] || "未克隆";
+      const sampleSeconds = info ? info.sample_seconds : 0;
+      const sampleCount = info ? info.sample_count : 0;
+      const minSeconds = info ? info.min_seconds : 10;
+      const cost = info ? info.clone_cost : 500;
+      const ready = info ? info.ready : false;
+      const contact = (info && info.contact) || v.clone_contact || (contacts[0] && contacts[0].contact_key) || "";
+      const contactOptions = ['<option value="">选择联系人</option>'].concat(contacts.map((c) =>
+        `<option value="${escapeHtml(c.contact_key)}" ${c.contact_key === contact ? "selected" : ""}>${escapeHtml(c.display_name || c.contact_key)}</option>`
+      )).join("");
       openSheet("语音", "识别对方的语音，用 ta 的声音回复", `
-        ${switchRow("语音识别", "把对方的语音转成文字", v.asr, 'id="vAsr"')}
-        ${switchRow("语音合成", "用 ta 的声音回复（开发中）", v.tts, 'id="vTts"')}
-        <div class="setting-row"><div class="label">音色</div><div class="spacer"></div>
-          <select id="vVoice">
-            <option value="female-1" ${v.voice === "female-1" ? "selected" : ""}>女声 · 温柔</option>
-            <option value="female-2" ${v.voice === "female-2" ? "selected" : ""}>女声 · 元气</option>
-            <option value="male-1" ${v.voice === "male-1" ? "selected" : ""}>男声 · 沉稳</option>
-            <option value="male-2" ${v.voice === "male-2" ? "selected" : ""}>男声 · 阳光</option>
-          </select></div>
+        ${switchRow("语音回复", "文字照常发送，额外发一条语音", !!a.reply_voice, 'id="vReply"')}
+        <div class="setting-row"><div class="label">预设音色</div><div class="spacer"></div>
+          <select id="vPreset">${presets.map((p) => `<option value="${p.id}" ${p.id === preset ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select></div>
+        <div class="setting-row"><div class="label">克隆状态</div><div class="spacer"></div><b>${statusText}</b></div>
+        <div class="desc">该联系人语音样本 ${sampleCount} 条 · 累计 ${sampleSeconds} 秒（至少 ${minSeconds} 秒）${ready ? "" : " · 平台未开启语音服务"}</div>
+        <div class="setting-row"><div class="label">克隆对象</div><div class="spacer"></div>
+          <select id="vContact">${contactOptions}</select></div>
+        <label class="desc" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0">
+          <input type="checkbox" id="vConsent" />
+          <span>我已获得该声音权利人的同意，仅用于本人对话</span></label>
+        <div class="btnrow">
+          <button class="btn ghost" id="vPreview">试听</button>
+          <button class="btn" id="vClone">克隆音色（${cost} 积分）</button>
+        </div>
         <div class="btnrow"><button class="btn primary wide" id="vSave">保存</button></div>`,
         (body, mask) => {
           body.querySelector("#vSave").onclick = async () => {
-            await saveSettings({ voice: { asr: body.querySelector("#vAsr").checked, tts: body.querySelector("#vTts").checked, voice: body.querySelector("#vVoice").value } });
+            const chosen = body.querySelector("#vPreset").value;
+            await saveSettings({
+              voice: { preset: chosen, voice: chosen },
+              advanced: { reply_voice: body.querySelector("#vReply").checked },
+            });
             closeModal(mask);
+          };
+          body.querySelector("#vPreview").onclick = async () => {
+            const button = body.querySelector("#vPreview");
+            button.disabled = true;
+            try { await playVoicePreview(`/api/personas/${personaId}/voice/preview`, {}); }
+            catch (error) { toastErr(error); }
+            finally { button.disabled = false; }
+          };
+          body.querySelector("#vClone").onclick = async () => {
+            const selected = body.querySelector("#vContact").value;
+            if (!selected) { toast("请先选择要克隆的联系人"); return; }
+            if (!body.querySelector("#vConsent").checked) { toast("请先确认已获得声音权利人同意"); return; }
+            const button = body.querySelector("#vClone");
+            button.disabled = true;
+            try {
+              await api(`/api/personas/${personaId}/voice/clone`, {
+                method: "POST", body: JSON.stringify({ contact: selected, consent: true }),
+              });
+              closeModal(mask);
+              toast("已开始克隆，稍后可回到这里查看状态");
+              openVoice();
+            } catch (error) { toastErr(error); button.disabled = false; }
           };
         });
     }

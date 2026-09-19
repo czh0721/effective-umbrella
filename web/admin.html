@@ -1548,6 +1548,16 @@
           <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
           <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
           <div class="field"><label>蒸馏积分单价</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
+          <div class="field full"><label>语音 MiniMax Key${platform.has_voice_key ? "（已配置 " + escapeHtml(platform.voice_key_masked || "") + "）" : ""}</label>
+            <input id="pfVoiceKey" type="password" autocomplete="off" placeholder="${platform.has_voice_key ? "留空保持不变" : "填入 MiniMax API Key"}" /></div>
+          <div class="field"><label>TTS 模型名</label><input id="pfVoiceModel" value="${escapeHtml(platform.voice_tts_model || "speech-02-turbo")}" /></div>
+          <div class="field"><label>音色克隆成本</label><input id="pfVoiceCloneCost" type="number" min="0" value="${escapeHtml(String(platform.voice_clone_cost == null ? 500 : platform.voice_clone_cost))}" /></div>
+          <div class="field"><label>语音回复成本</label><input id="pfVoiceReplyCost" type="number" min="0" value="${escapeHtml(String(platform.voice_reply_cost == null ? 20 : platform.voice_reply_cost))}" /></div>
+          <div class="field"><label>语音用量</label><input value="克隆 ${escapeHtml(String((platform.voice_usage || {}).clones || 0))} 次 / 回复 ${escapeHtml(String((platform.voice_usage || {}).replies || 0))} 条" disabled /></div>
+        </div>
+        <div class="toggle-row">
+          <div class="tt"><b>启用语音服务</b><span>开启后用户可克隆音色并让分身用语音回复</span></div>
+          <label class="switch"><input type="checkbox" id="pfVoiceEnabled" ${platform.voice_enabled ? "checked" : ""} /><span class="track"></span></label>
         </div>
         <div class="toggle-row">
           <div class="tt"><b>启用平台模型</b><span>关闭后未配置 Key 的用户将无法获得回复</span></div>
@@ -1569,9 +1579,15 @@
             new_user_gift: Number($("pfGift").value) || 0,
             default_credit_days: Number($("pfDefaultDays").value) || 30,
             distill_credit_cost: Number($("pfDistillCost").value) || 0,
+            voice_tts_model: $("pfVoiceModel").value.trim(),
+            voice_clone_cost: Number($("pfVoiceCloneCost").value) || 0,
+            voice_reply_cost: Number($("pfVoiceReplyCost").value) || 0,
+            voice_enabled: $("pfVoiceEnabled").checked,
           };
           const key = $("pfKey").value.trim();
           if (key) payload.api_key = key;
+          const voiceKey = $("pfVoiceKey").value.trim();
+          if (voiceKey) payload.minimax_api_key = voiceKey;
           state.platform = await api("/api/admin/platform", { method: "PUT", body: JSON.stringify(payload) });
           toast("平台配置已保存");
           renderCreditsPanel();
