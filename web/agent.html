@@ -1134,7 +1134,7 @@
       )).join("");
       openSheet("语音", "用 ta 的声音回复", `
         ${ready ? "" : '<div class="hint" style="margin:0 0 12px;color:#b06b00">平台尚未开启语音服务，开通后自动生效。</div>'}
-        <div class="stat-strip">
+        <div class="stat-strip" style="margin-bottom:0">
           <div class="stat"><div class="n">${sampleCount}</div><div class="l">语音样本 · 条</div></div>
           <div class="stat"><div class="n">${Math.round(sampleSeconds)}s</div><div class="l">累计时长</div></div>
         </div>
@@ -1143,7 +1143,8 @@
         <div class="setting-group glass">
           ${switchRow("语音回复", "文字照常发送，额外发一条语音", !!a.reply_voice, 'id="vReply"')}
           <div class="setting-row">
-            <div class="g-text"><div class="g-title">预设音色</div><div class="g-sub">尚未克隆时使用</div></div>
+            <div><div class="label">预设音色</div><div class="desc">尚未克隆时使用</div></div>
+            <div class="spacer"></div>
             <select id="vPreset">${presets.map((p) => `<option value="${p.id}" ${p.id === preset ? "selected" : ""}>${escapeHtml(p.label)}</option>`).join("")}</select>
             <button class="btn ghost small" id="vPreview" style="flex:none">试听</button>
           </div>
@@ -1152,7 +1153,8 @@
         <div class="group-title">克隆音色</div>
         <div class="setting-group glass">
           <div class="setting-row">
-            <div class="g-text"><div class="g-title">克隆对象</div><div class="g-sub">选择要学习声音的联系人</div></div>
+            <div><div class="label">克隆对象</div><div class="desc">选择要学习声音的联系人</div></div>
+            <div class="spacer"></div>
             <select id="vContact">${contactOptions}</select>
           </div>
           <div class="g-row">
