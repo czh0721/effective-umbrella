@@ -80,6 +80,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 追加补丁（2026-09-13）：`messaging/sender.go` 的 `SendTextReply` 在纯文本为空时直接返回，使平台只发表情不附文字时不产生空气泡；`messaging/handler.go` 图片分支转发成功后不再 return，而是以占位文本 `[图片]` 继续走 agent，由平台按人格设置 `advanced.reply_to_images` 决定是否回应（默认静默）。
   - 追加补丁（2026-09-19）：`config.Config.VoiceEndpoint`（config key `voice_endpoint`，env `WECLAW_VOICE_ENDPOINT`）与 `messaging.Handler.SetVoiceEndpoint`；收到语音时 `forwardVoice` 把原始音频 multipart POST 到该端点，平台 `POST /api/wechat/voice/{bridge_token}` 存档为音色克隆样本。相关文件：`/workspace/scripts/weclaw/{nian.patch,build.sh,sync_to_server.sh,zz_voice_test.go}`。
   - weclaw 只在进程启动时读取一次配置：`ensure_config` 写入 `voice_endpoint`/`media_endpoint` 后，必须重启转发进程（`systemctl restart nian`，或 UI 停止后重新开始）才会生效，否则已运行的 bridge 仍用旧配置。
+  - 语音提供商可切换（2026-09-19）：`platform_config.voice_provider` 取 `minimax`（默认）或 `doubao`；`ex_persona/voice.py` 用 `VoiceCredentials` + `synthesize()/clone()` 分派。豆包走火山 V3（`/api/v3/tts/unidirectional` 合成、`/api/v3/tts/voice_clone` 复刻），需在后台填 `doubao_app_id` + `doubao_access_token`（旧版控制台）或 `doubao_api_key`（新版），也可用 `PERSONA_DOUBAO_APP_ID`/`PERSONA_DOUBAO_ACCESS_TOKEN`/`PERSONA_DOUBAO_API_KEY` 环境变量。切换提供商不影响计费与出站流程。
   - 编译类命令必须走 background terminal，不要用前台 bash 直接构建。
 
 [Project Knowledge Summary]
