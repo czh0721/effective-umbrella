@@ -2657,7 +2657,9 @@ def clone_persona_voice(
     persona = _require_persona(user["id"], persona_id)
     platform = load_platform_config()
     if not platform.voice_ready:
-        raise HTTPException(status_code=400, detail="平台未开启语音服务")
+        if not platform.voice_credentials_ready:
+            raise HTTPException(status_code=400, detail="平台未配置语音凭据，请联系管理员")
+        raise HTTPException(status_code=400, detail="平台尚未启用语音服务，请联系管理员")
     if not payload.consent:
         raise HTTPException(status_code=400, detail="请先确认已获得声音权利人同意")
     settings = persona_settings.load(persona.get("settings"))
@@ -2710,8 +2712,10 @@ def preview_persona_voice(
     persona = _require_persona(user["id"], persona_id)
     platform = load_platform_config()
     creds = voice.credentials(platform)
-    if not creds.ready:
-        raise HTTPException(status_code=400, detail="平台未配置语音服务")
+    if not platform.voice_ready:
+        if not platform.voice_credentials_ready:
+            raise HTTPException(status_code=400, detail="平台未配置语音凭据，请联系管理员")
+        raise HTTPException(status_code=400, detail="平台尚未启用语音服务，请联系管理员")
     settings = persona_settings.load(persona.get("settings"))
     requested = (payload.voice_id or "").strip()
     clone_id = str(settings["voice"].get("clone_voice_id") or "")

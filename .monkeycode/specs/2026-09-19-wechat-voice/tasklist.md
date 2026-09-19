@@ -104,3 +104,16 @@
 - 多提供商增量：`ruff check ex_persona tests` 全过；`unittest discover` 504 全过；`scripts/e2e/run_chain.py` 129/129。豆包接口按官方 V3 文档实现，需管理员填入豆包 App ID + Access Token（或 API Key）后做一次真实联调验证。
 - 用户上传音频增量：`ruff check ex_persona tests` 全过；`unittest discover` 511 全过；`scripts/e2e/run_chain.py` 129/129。
 - 收集开关与进度增量：`ruff check ex_persona tests` 全过；`unittest discover` 513 全过；`scripts/e2e/run_chain.py` 129/129。
+
+## T14 语音就绪判定一致性与后台反馈
+
+问题：后台「启用语音服务」为总开关，但试听接口原只校验 `creds.ready`（提供商凭据），总开关关闭时仍可能进入合成，且错误文案统一为「平台未配置语音服务」，无法区分「未启用」与「缺凭据」；后台保存后也没有任何语音就绪提示。
+
+- [x] `webapp.py` `preview_persona_voice`：改用 `platform.voice_ready` 判定；未配置凭据返回「平台未配置语音凭据，请联系管理员」，凭据就绪但未启用返回「平台尚未启用语音服务，请联系管理员」。
+- [x] `webapp.py` `clone_persona_voice`：错误文案与试听统一，区分「未启用」与「缺凭据」。
+- [x] `web/admin.html` `renderCreditsPanel()`：新增语音就绪徽标（`语音已就绪 · 豆包/MiniMax`、`语音未启用 · …`、`语音缺少 … 凭据`），按 `voice_ready` / `voice_enabled` / 提供商凭据三态渲染，并追加到平台配置表单底部。
+- [x] `tests/test_voice_reply.py::VoicePreviewGateTest`：未启用 400、缺凭据 400、就绪可合成三条回归。
+- [x] `tests/test_contracts.py::AdminConsoleStructureTest::test_voice_readiness_chip_present`：徽标文案与凭据字段契约。
+
+- 验证：`ruff check ex_persona tests` 全过；`unittest discover` 520 全过；`scripts/e2e/run_chain.py` 129/129。
+- 提示：后台「启用语音服务」是总开关；豆包生效还需「语音提供商 = 豆包」且有 `豆包接口密钥` 或 `豆包应用 ID` + `豆包访问令牌`。

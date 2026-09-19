@@ -162,6 +162,14 @@ class AdminConsoleStructureTest(unittest.TestCase):
         for stale in ("TTS 模型名", "豆包资源 ID", "音色克隆成本", "语音回复成本"):
             self.assertNotIn(stale, self.text)
 
+    def test_voice_readiness_chip_present(self):
+        for marker in ("语音已就绪 · ", "语音未启用 · ", "语音缺少 "):
+            self.assertIn(marker, self.text)
+        self.assertIn("const voiceCredsReady", self.text)
+        self.assertIn("platform.has_doubao_key", self.text)
+        self.assertIn("platform.has_doubao_token", self.text)
+        self.assertIn('<span class="state-line">${voiceChip}</span>', self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

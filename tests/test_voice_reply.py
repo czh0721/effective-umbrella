@@ -178,5 +178,57 @@ class VoiceReplyTest(unittest.TestCase):
             self.assertEqual(started.call_args.args[3], "我也想你，早点休息。")
 
 
+def _configure_voice_state(*, minimax_key="", enabled=True, provider="minimax"):
+    store.set_platform_config(
+        "", "https://api.deepseek.com/v1", "deepseek-chat", True, 0, 0,
+        voice_provider=provider,
+        minimax_api_key_encrypted=crypto.encrypt(minimax_key) if minimax_key else "",
+        voice_tts_model="speech-02-turbo",
+        voice_clone_cost=500,
+        voice_reply_cost=20,
+        voice_enabled=enabled,
+    )
+
+
+class VoicePreviewGateTest(unittest.TestCase):
+    def setUp(self):
+        store.init_db()
+
+    def _user_persona(self, client):
+        user = client.post(
+            "/api/auth/register",
+            json={"username": f"vp-{uuid.uuid4().hex[:8]}", "password": "Password123!"},
+        ).json()["user"]
+        persona = client.post("/api/personas", json={"name": "小念"}).json()["persona"]
+        return user, persona
+
+    def test_preview_reports_not_enabled(self):
+        with TestClient(app) as client:
+            _user, persona = self._user_persona(client)
+            _configure_voice_state(minimax_key="mm-key", enabled=False)
+            response = client.post(f"/api/personas/{persona['id']}/voice/preview", json={})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn("尚未启用语音服务", response.json()["detail"])
+
+    def test_preview_reports_missing_credentials(self):
+        with TestClient(app) as client:
+            _user, persona = self._user_persona(client)
+            _configure_voice_state(minimax_key="", enabled=True)
+            response = client.post(f"/api/personas/{persona['id']}/voice/preview", json={})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn("未配置语音凭据", response.json()["detail"])
+
+    def test_preview_synthesizes_when_ready(self):
+        with TestClient(app) as client:
+            _user, persona = self._user_persona(client)
+            _configure_voice_state(minimax_key="mm-key", enabled=True)
+            with mock.patch.object(
+                webapp_module.voice, "minimax_tts", return_value=b"ID3" + b"\x00" * 16
+            ):
+                response = client.post(f"/api/personas/{persona['id']}/voice/preview", json={})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.content[:3], b"ID3")
+
+
 if __name__ == "__main__":
     unittest.main()

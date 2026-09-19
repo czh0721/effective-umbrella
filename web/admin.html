@@ -1559,6 +1559,15 @@
     /* ------------------------------------------------------------ credits */
     function renderCreditsPanel() {
       const platform = state.platform || {};
+      const voiceProviderLabel = platform.voice_provider === "doubao" ? "豆包" : "MiniMax";
+      const voiceCredsReady = platform.voice_provider === "doubao"
+        ? Boolean(platform.has_doubao_key || (platform.doubao_app_id && platform.has_doubao_token))
+        : Boolean(platform.has_voice_key);
+      const voiceChip = platform.voice_ready
+        ? icon("check", "ic chip-ok") + '<span class="chip-ok">语音已就绪 · ' + voiceProviderLabel + "</span>"
+        : !platform.voice_enabled
+          ? icon("warning", "ic chip-off") + '<span class="chip-off">语音未启用 · ' + voiceProviderLabel + "</span>"
+          : icon("warning", "ic chip-off") + '<span class="chip-off">语音缺少 ' + voiceProviderLabel + " 凭据</span>";
       $("platformHead").innerHTML = headIcon("cpu", "平台模型", '<span class="spacer"></span>' +
         `<span class="tag ${platform.enabled ? "resolved" : "plain"}">${platform.enabled ? "已启用" : "未启用"}</span>`);
       $("platformForm").innerHTML = `
@@ -1599,6 +1608,7 @@
         <div class="form-actions">
           <button class="btn primary" id="pfSave">保存平台配置</button>
           <span class="state-line">${platform.has_key ? icon("check", "ic chip-ok") + '<span class="chip-ok">密钥已就绪</span>' : icon("warning", "ic chip-off") + '<span class="chip-off">尚未配置密钥</span>'}</span>
+          <span class="state-line">${voiceChip}</span>
         </div>`;
       $("pfSave").onclick = async () => {
         const button = $("pfSave");
