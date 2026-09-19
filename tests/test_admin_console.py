@@ -460,5 +460,24 @@ class AdminExportTest(unittest.TestCase):
             self.assertFalse(forced.json()["cached"])
 
 
+class AdminPlatformConfigTest(unittest.TestCase):
+    def test_rejects_unknown_voice_provider(self):
+        # 用独立数据目录，避免改动平台配置影响共享数据目录里的其他测试。
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, {"PERSONA_DATA_DIR": tmp}
+        ):
+            store.init_db()
+            with TestClient(app) as client:
+                username = f"admin-{uuid.uuid4().hex[:8]}"
+                _make_admin(username)
+                _admin_login(client, username)
+                bad = client.put("/api/admin/platform", json={"voice_provider": "openai-tts"})
+                self.assertEqual(bad.status_code, 400, bad.text)
+                good = client.put("/api/admin/platform", json={"voice_provider": "doubao"})
+                self.assertEqual(good.status_code, 200, good.text)
+                self.assertEqual(good.json()["voice_provider"], "doubao")
+                self.assertEqual(store.get_platform_config_row()["voice_provider"], "doubao")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -195,7 +195,7 @@ class MediaRouteTest(unittest.TestCase):
 
             captured: dict = {}
 
-            def _fake_queue(uid, persona, contact, stickers, directives):
+            def _fake_queue(uid, persona, contact, stickers, directives, **kwargs):
                 captured["contact"] = contact
                 captured["stickers"] = stickers
                 captured["directives"] = directives

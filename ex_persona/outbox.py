@@ -63,11 +63,26 @@ class OutboxWorker:
         self._stop.set()
 
     def enqueue(
-        self, user_id: int, recipient: str, text: str = "", media: str = "", delay_seconds: float = 0
+        self,
+        user_id: int,
+        recipient: str,
+        text: str = "",
+        media: str = "",
+        delay_seconds: float = 0,
+        charge_ref: str = "",
+        charge_amount: int = 0,
     ) -> int:
         if not recipient or (not text and not media):
             return 0
-        outbox_id = store.add_outbox(user_id, recipient, text, media, delay_seconds=delay_seconds)
+        outbox_id = store.add_outbox(
+            user_id,
+            recipient,
+            text,
+            media,
+            delay_seconds=delay_seconds,
+            charge_ref=charge_ref,
+            charge_amount=charge_amount,
+        )
         observability.METRICS.inc("outbox.enqueued")
         return outbox_id
 

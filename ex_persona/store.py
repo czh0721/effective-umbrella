@@ -582,6 +582,10 @@ _MIGRATIONS: dict[str, dict[str, str]] = {
         "doubao_resource_id": "TEXT NOT NULL DEFAULT ''",
     },
     "proactive_log": {"kind": "TEXT NOT NULL DEFAULT ''"},
+    "outbox": {
+        "charge_ref": "TEXT NOT NULL DEFAULT ''",
+        "charge_amount": "INTEGER NOT NULL DEFAULT 0",
+    },
 }
 
 # 积分与蒸馏券的有效期档位（固定天数）。
@@ -4297,7 +4301,13 @@ def fail_stale_tasks(reason: str = "服务重启，任务已中断，请重试")
 # --------------------------------------------------------------------------- #
 
 def add_outbox(
-    user_id: int, recipient: str, text: str = "", media: str = "", delay_seconds: float = 0
+    user_id: int,
+    recipient: str,
+    text: str = "",
+    media: str = "",
+    delay_seconds: float = 0,
+    charge_ref: str = "",
+    charge_amount: int = 0,
 ) -> int:
     _ensure()
     now = utcnow()
@@ -4309,9 +4319,12 @@ def add_outbox(
     with _lock, connect() as conn:
         cursor = conn.execute(
             "INSERT INTO outbox (user_id, recipient, text, media, status, attempts,"
-            " last_error, next_attempt_at, created_at, updated_at)"
-            " VALUES (?, ?, ?, ?, 'pending', 0, '', ?, ?, ?)",
-            (user_id, recipient, text or "", media or "", next_at, now, now),
+            " last_error, next_attempt_at, created_at, updated_at, charge_ref, charge_amount)"
+            " VALUES (?, ?, ?, ?, 'pending', 0, '', ?, ?, ?, ?, ?)",
+            (
+                user_id, recipient, text or "", media or "", next_at, now, now,
+                (charge_ref or "").strip()[:120], max(int(charge_amount or 0), 0),
+            ),
         )
         return int(cursor.lastrowid or 0)
 
@@ -4353,6 +4366,33 @@ def mark_outbox_failed(outbox_id: int, error: str) -> None:
             "UPDATE outbox SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?",
             (error or "", utcnow(), outbox_id),
         )
+
+
+def outbox_charge_state(charge_ref: str) -> dict:
+    """统计同一计费组（charge_ref）的出站状态，用于失败后是否退款。
+
+    返回 ``sent`` 已送达条数、``pending`` 仍需重试条数、``amount`` 本组涉及的积分。
+    """
+    _ensure()
+    ref = (charge_ref or "").strip()
+    if not ref:
+        return {"sent": 0, "pending": 0, "amount": 0, "total": 0}
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT"
+            " SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,"
+            " SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,"
+            " COUNT(*) AS total,"
+            " COALESCE(MAX(charge_amount), 0) AS amount"
+            " FROM outbox WHERE charge_ref = ?",
+            (ref,),
+        ).fetchone()
+    return {
+        "sent": int(row["sent"] or 0),
+        "pending": int(row["pending"] or 0),
+        "total": int(row["total"] or 0),
+        "amount": int(row["amount"] or 0),
+    }
 
 
 def count_outbox_sent_since(user_id: int, since_iso: str) -> int:
@@ -5013,10 +5053,26 @@ def grant_credits(
         elif delta < 0:
             needed = -delta
             available = int(row["credits"])
-            live = _live_batch_total(conn, user_id)
-            if available < needed or live < needed:
+            if available < needed:
                 raise InsufficientCredits(available)
-            _consume_batches(conn, user_id, needed)
+            live = _live_batch_total(conn, user_id)
+            if live < needed:
+                # 批次账本与 users.credits 失配（历史数据迁移/手工改库所致）。
+                # users.credits 是钱包的权威余额，只要它还够就允许扣费，避免用户
+                # 明明有积分却被卡住；批次缺口只记日志供运维核对。
+                log.warning(
+                    "credit batch mismatch",
+                    extra={
+                        "event": "credits.batch_mismatch",
+                        "user_id": user_id,
+                        "credits": available,
+                        "live_batches": live,
+                        "needed": needed,
+                    },
+                )
+                _consume_batches(conn, user_id, live)
+            else:
+                _consume_batches(conn, user_id, needed)
         # 相对增减 + 非负约束放在同一条 UPDATE 内，避免跨进程读改写丢更新。
         cursor = conn.execute(
             "UPDATE users SET credits = credits + ? WHERE id = ? AND credits + ? >= 0",

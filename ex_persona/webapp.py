@@ -1128,13 +1128,45 @@ def _outbox_send(user_id: int, recipient: str, text: str, media: str) -> bool:
     return int(result.get("code", 1)) == 0
 
 
+def _maybe_refund_outbox_charge(row: dict) -> bool:
+    """纯媒体回复整组投递失败时退还本轮积分；成功退款返回 True。
+
+    退款条件：该计费组存在积分、且没有任何一条送达、也没有仍在重试的条目。
+    ``grant_credits`` 用 ``charge_ref`` 作幂等键，重复调用只会退一次。
+    """
+    ref = (row.get("charge_ref") or "").strip()
+    if not ref:
+        return False
+    state = store.outbox_charge_state(ref)
+    amount = int(state.get("amount") or 0)
+    if amount <= 0 or state.get("sent") or state.get("pending"):
+        return False
+    user_id = int(row.get("user_id") or 0)
+    if not user_id:
+        return False
+    try:
+        store.grant_credits(
+            user_id, amount, reason="发送失败退款", actor="system", ref=ref,
+            idem=f"outbox-charge:{ref}",
+        )
+    except Exception:  # noqa: BLE001
+        log.warning("outbox refund failed", extra={"event": "outbox.refund_fail", "ref": ref})
+        return False
+    observability.METRICS.inc("outbox.charge_refunded")
+    return True
+
+
 def _on_outbox_fail(row: dict, error: str) -> None:
     """出站消息重试耗尽时提醒用户检查微信是否掉线。"""
     user_id = int(row.get("user_id") or 0)
     if not user_id:
         return
+    refunded = _maybe_refund_outbox_charge(row)
     persona = store.get_active_persona(user_id)
     settings = persona_settings.load(persona.get("settings")) if persona else {}
+    if refunded:
+        _notify(user_id, "send_failed", "消息多次发送失败，本轮积分已退回；请检查微信是否掉线并重新扫码。")
+        return
     if not _safety(settings).get("offline_alert", True):
         return
     _notify(user_id, "send_failed", "有消息多次发送失败，微信可能已掉线，请重新扫码登录。")
@@ -1177,8 +1209,14 @@ def _queue_media_replies(
     contact: str,
     stickers: list[dict],
     directives: list[dict],
+    charge_ref: str = "",
+    charge_amount: int = 0,
 ) -> int:
-    """把回复里的媒体指令落到出站队列，最多两条，避免刷屏。"""
+    """把回复里的媒体指令落到出站队列，最多两条，避免刷屏。
+
+    ``charge_ref``/``charge_amount`` 仅用于「纯媒体回复」：这类回复没有同步正文，
+    投递全部依赖出站队列，若最终一条都没送达可据此退还本轮积分。
+    """
     if not contact or not directives or not stickers:
         return 0
     target = persona or store.get_active_persona(user_id)
@@ -1193,7 +1231,9 @@ def _queue_media_replies(
         path = (sticker or {}).get("path") or ""
         if not path:
             continue
-        if _outbox.enqueue(user_id, contact, media=path):
+        # 计费额只挂在第一条成功的媒体上，退款按整组处理一次。
+        amount = charge_amount if (charge_ref and queued == 0) else 0
+        if _outbox.enqueue(user_id, contact, media=path, charge_ref=charge_ref, charge_amount=amount):
             queued += 1
             _record_send(user_id)
             observability.METRICS.inc(f"reply.media.{directive.get('kind', 'media').lower()}")
@@ -3946,6 +3986,8 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
     allowed_kinds = media_reply.enabled_kinds(settings)
     media_directives: list[dict] = []
     insufficient = False
+    media_charge_ref = ""
+    media_charge_amount = 0
     with _reply_lock(key):
         cached = _reply_cache.get(key)
         fresh = not (dedup_seconds > 0 and cached and now - cached[0] < dedup_seconds)
@@ -4072,7 +4114,11 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
                 elif media_delivered:
                     # 纯表情/图片回复：正文为空但媒体会照常发出，属于成功回复，
                     # 不退款也不提示"没发出内容"（否则用户白拿一次发送）。
+                    # 记下计费组，若这批媒体最终一条都没送达则整组退款。
                     observability.METRICS.inc("reply.media_only")
+                    if charged:
+                        media_charge_ref = f"reply:{persona['id']}:{uuid.uuid4().hex}"
+                        media_charge_amount = charged
                 else:
                     # 没有可发送的内容（乱码丢弃 / 频率上限 / 静默）：不算一次成功
                     # 回复，退回本轮扣费，也不能把空回复写进缓存。
@@ -4110,8 +4156,26 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
             reply = segments[0]
             _queue_text_segments(user_id, persona, contact, segments[1:], base_delay=lead_delay)
 
+    media_queued = 0
     if fresh and contact:
-        _queue_media_replies(user_id, persona, contact, stickers, media_directives)
+        media_queued = _queue_media_replies(
+            user_id, persona, contact, stickers, media_directives,
+            charge_ref=media_charge_ref, charge_amount=media_charge_amount,
+        )
+
+    if media_charge_amount and not media_queued:
+        # 声明会发媒体却一条都没排出去（无可用素材/队列拒绝）：等于没有回复，
+        # 不能白扣积分，按幂等键立即退款并提示。
+        try:
+            store.grant_credits(
+                user_id, media_charge_amount, reason="无回复退款", actor="system",
+                ref=f"persona:{persona['id']}", idem=f"outbox-charge:{media_charge_ref}",
+            )
+        except Exception:  # noqa: BLE001
+            log.warning("media refund failed", extra={"event": "reply.refund_fail"})
+        else:
+            observability.METRICS.inc("reply.media_undeliverable")
+            _notify(user_id, "llm", "分身这次没发出内容，本轮积分已退回。")
 
     if reply:
         _record_send(user_id)
@@ -5228,6 +5292,14 @@ def admin_set_platform(
         max(int(payload.distill_ticket_price), 0) if payload.distill_ticket_price is not None
         else int(row.get("distill_ticket_price") or 0)
     )
+    voice_provider = payload.voice_provider
+    if voice_provider is not None:
+        voice_provider = str(voice_provider).strip().lower()
+        if voice_provider and voice_provider not in voice.PROVIDERS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"不支持的语音提供商：{payload.voice_provider}",
+            )
     store.set_platform_config(
         encrypted, base_url, model, enabled, per_turn_cost, new_user_gift,
         default_credit_days=default_credit_days,
@@ -5235,7 +5307,7 @@ def admin_set_platform(
         distill_ticket_price=distill_ticket_price,
         # 「注册赠送蒸馏次数」已并入 new_user_gift，这里固定归零以保持退役状态。
         distill_ticket_gift=0,
-        voice_provider=payload.voice_provider,
+        voice_provider=voice_provider,
         minimax_api_key_encrypted=(
             crypto.encrypt(payload.minimax_api_key.strip())
             if payload.minimax_api_key is not None and payload.minimax_api_key.strip()
@@ -5270,7 +5342,7 @@ def admin_set_platform(
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
                 f" days={default_credit_days} distill={distill_credit_cost}"
                 f" voice_enabled={payload.voice_enabled}"
-                f" voice_provider={payload.voice_provider}"),
+                f" voice_provider={voice_provider}"),
     )
     return admin_get_platform(admin)
 

@@ -59,6 +59,39 @@ class CreditStoreTest(unittest.TestCase):
         self.assertEqual(store.get_credits(user["id"]), 5)
         self.assertEqual(store.credits_summary(user["id"])["used"], 0)
 
+    def test_batch_mismatch_still_allows_deduction(self):
+        user = self._user("credit-mismatch")
+        store.grant_credits(user["id"], 100)
+        # 模拟历史失配：users.credits 仍是 100，但批次额度被清空。
+        with store.connect() as conn:
+            conn.execute(
+                "UPDATE credit_batches SET remaining = 0 WHERE user_id = ?", (user["id"],)
+            )
+        store.deduct_credits(user["id"], 30, reason="reply")
+        self.assertEqual(
+            store.get_credits(user["id"]), 70,
+            "users.credits 是权威余额，批次失配时不能卡住扣费",
+        )
+
+    def test_outbox_charge_state(self):
+        user = self._user("credit-charge-state")
+        first = store.add_outbox(user["id"], "c1", text="a", charge_ref="ref-1", charge_amount=20)
+        second = store.add_outbox(user["id"], "c1", text="b", charge_ref="ref-1")
+        self.assertTrue(first and second)
+        state = store.outbox_charge_state("ref-1")
+        self.assertEqual(state["total"], 2)
+        self.assertEqual(state["pending"], 2)
+        self.assertEqual(state["sent"], 0)
+        self.assertEqual(state["amount"], 20)
+        store.mark_outbox_sent(first)
+        state = store.outbox_charge_state("ref-1")
+        self.assertEqual(state["sent"], 1)
+        self.assertEqual(state["pending"], 1)
+        # 收尾：避免把 pending 行留给共享数据目录里的其他测试。
+        store.mark_outbox_sent(second)
+        self.assertEqual(store.outbox_charge_state("ref-1")["pending"], 0)
+        self.assertEqual(store.outbox_charge_state("")["amount"], 0)
+
     def test_ledger_balance_after(self):
         user = self._user("credit-ledger")
         store.grant_credits(user["id"], 40, reason="a", actor="admin:x")
@@ -413,7 +446,7 @@ class BillingPathTest(unittest.TestCase):
                 original_queue = webapp_module._queue_media_replies
                 restore_agent = self._patch_agent("[[STICKER:1]]", calls)
                 webapp_module._queue_media_replies = (
-                    lambda uid, p, c, s, d: (queued.append(d) or len(d))
+                    lambda uid, p, c, s, d, **kw: (queued.append(d) or len(d))
                 )
                 try:
                     response = client.post(
@@ -429,6 +462,84 @@ class BillingPathTest(unittest.TestCase):
                 self.assertEqual(
                     store.get_credits(user["id"]), start - 2,
                     "表情已经发出，属于成功回复，不能把本轮积分退回",
+                )
+
+    def test_media_only_outbox_failure_refunds(self):
+        import json as _json
+
+        from ex_persona import webapp as webapp_module
+
+        with _isolated_db():
+            with TestClient(app) as client:
+                user, persona = self._setup_chat(client, "token-media-fail", "表情失败", 2, 100)
+                upload = client.post(
+                    f"/api/personas/{persona['id']}/stickers",
+                    files={"file": ("cute.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+                )
+                self.assertEqual(upload.status_code, 200, upload.text)
+                store.update_persona(
+                    user["id"], persona["id"],
+                    settings=_json.dumps({"advanced": {"reply_sticker": True}}),
+                )
+                start = store.get_credits(user["id"])
+                calls: list = []
+                restore_agent = self._patch_agent("[[STICKER:1]]", calls)
+                try:
+                    response = client.post(
+                        "/v1/chat/completions/token-media-fail",
+                        json={"user": "c1", "messages": [{"role": "user", "content": "在吗"}]},
+                    )
+                finally:
+                    webapp_module.get_agent = restore_agent
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(store.get_credits(user["id"]), start - 2)
+                rows = [
+                    r for r in store.list_due_outbox("9999-12-31T00:00:00+00:00", limit=50)
+                    if r.get("charge_ref")
+                ]
+                self.assertTrue(rows, "纯表情回复应带计费组落库")
+                for row in rows:
+                    store.mark_outbox_failed(row["id"], "boom")
+                    webapp_module._on_outbox_fail(row, "boom")
+                self.assertEqual(
+                    store.get_credits(user["id"]), start,
+                    "整组媒体都没送达时应退还本轮积分",
+                )
+
+    def test_media_only_undeliverable_refunds(self):
+        import json as _json
+
+        from ex_persona import webapp as webapp_module
+
+        with _isolated_db():
+            with TestClient(app) as client:
+                user, persona = self._setup_chat(client, "token-media-none", "无素材", 2, 100)
+                upload = client.post(
+                    f"/api/personas/{persona['id']}/stickers",
+                    files={"file": ("cute.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+                )
+                self.assertEqual(upload.status_code, 200, upload.text)
+                store.update_persona(
+                    user["id"], persona["id"],
+                    settings=_json.dumps({"advanced": {"reply_sticker": True}}),
+                )
+                start = store.get_credits(user["id"])
+                calls: list = []
+                restore_agent = self._patch_agent("[[STICKER:1]]", calls)
+                original_choose = webapp_module.media_reply.choose_media
+                webapp_module.media_reply.choose_media = lambda *a, **k: None
+                try:
+                    response = client.post(
+                        "/v1/chat/completions/token-media-none",
+                        json={"user": "c1", "messages": [{"role": "user", "content": "在吗"}]},
+                    )
+                finally:
+                    webapp_module.get_agent = restore_agent
+                    webapp_module.media_reply.choose_media = original_choose
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(
+                    store.get_credits(user["id"]), start,
+                    "声明发媒体却没有任何可用素材时，应退回本轮积分",
                 )
 
     def test_reply_cache_not_charged_twice(self):
