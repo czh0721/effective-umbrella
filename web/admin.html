@@ -366,7 +366,7 @@
       { key: "orders", label: "订单", icon: "store", title: "购买订单", desc: "查看套餐购买订单与营收趋势" },
       { key: "credits", label: "模型与计费", icon: "cpu", title: "模型与计费", desc: "配置平台模型与语音服务，管理积分套餐、兑换码与念念币" },
       { key: "system", label: "系统", icon: "sliders", title: "系统状态", desc: "服务健康、功能开关、微信绑定、任务队列与应用日志" },
-      { key: "audit", label: "审计", icon: "clock", title: "操作审计", desc: "记录管理员的关键操作，支持按类型筛选与导出" },
+      { key: "audit", label: "审计", icon: "clock", title: "操作审计" },
       { key: "admins", label: "管理员", icon: "shield", title: "管理员与权限", desc: "管理后台账号、账号安全与登录锁定" },
     ];
     const TONE = {
@@ -555,7 +555,9 @@
       document.querySelectorAll("#sideNav button").forEach((btn) => btn.classList.toggle("active", btn.dataset.tab === name));
       document.querySelectorAll(".panel").forEach((panel) => panel.classList.toggle("on", panel.id === "panel-" + name));
       $("pageTitle").textContent = meta.title;
-      $("pageDesc").textContent = meta.desc || "";
+      const desc = meta.desc || "";
+      $("pageDesc").textContent = desc;
+      $("pageDesc").style.display = desc ? "" : "none";
       closeNav();
       revealInit();
       if (name === "system" && !state.logItems.length) loadLogs();

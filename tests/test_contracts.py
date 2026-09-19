@@ -147,9 +147,14 @@ class AdminConsoleStructureTest(unittest.TestCase):
 
     def test_section_description_rendered(self):
         self.assertIn('id="pageDesc"', self.text)
-        self.assertIn('$("pageDesc").textContent = meta.desc', self.text)
+        self.assertIn('const desc = meta.desc || ""', self.text)
+        self.assertIn('$("pageDesc").style.display = desc ? "" : "none"', self.text)
         for desc in ("一屏速览", "重置密码", "触达效果", "兑换码", "登录锁定"):
             self.assertIn(desc, self.text)
+        # 操作审计分区不需要说明文案
+        audit_line = [line for line in self.text.splitlines() if 'key: "audit"' in line]
+        self.assertEqual(len(audit_line), 1)
+        self.assertNotIn("desc:", audit_line[0])
 
     def test_status_terms_are_chinese(self):
         for marker in ("运行中", "空闲", "异常", "已中断", "信息", "警告", "严重"):
