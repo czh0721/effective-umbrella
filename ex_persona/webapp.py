@@ -251,6 +251,10 @@ async def _security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    # HTML 页面禁止启发式缓存：否则浏览器可能长期保留旧版文案，导致发布后仍看到过期界面。
+    if "text/html" in (response.headers.get("content-type") or "").lower():
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
     # HSTS：仅在 HTTPS 下生效；不包含 includeSubDomains，避免影响同根域的其他站点。
     if _is_https_request(request):

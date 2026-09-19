@@ -1,4 +1,4 @@
-const CACHE = "nian-v2";
+const CACHE = "nian-v3";
 const PRECACHE = [
   "/offline.html",
   "/static/app.css",

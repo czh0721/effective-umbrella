@@ -385,6 +385,7 @@ class HardeningTest(unittest.TestCase):
             self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
             self.assertEqual(response.headers.get("X-Frame-Options"), "DENY")
             self.assertIn("strict-origin", response.headers.get("Referrer-Policy", ""))
+            self.assertIn("no-store", response.headers.get("Cache-Control", ""))
             manifest = client.get("/manifest.webmanifest")
             self.assertEqual(manifest.status_code, 200)
             self.assertIn("manifest", manifest.headers.get("content-type", ""))
