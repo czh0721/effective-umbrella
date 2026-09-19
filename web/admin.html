@@ -1548,7 +1548,6 @@
           <div class="field"><label>注册赠送积分</label><input id="pfGift" type="number" min="0" value="${escapeHtml(String(platform.new_user_gift == null ? 0 : platform.new_user_gift))}" /></div>
           <div class="field"><label>默认积分有效期</label><select id="pfDefaultDays">${validityOptions(platform.default_credit_days)}</select></div>
           <div class="field"><label>蒸馏积分单价</label><input id="pfDistillCost" type="number" min="0" value="${escapeHtml(String(platform.distill_credit_cost == null ? 100 : platform.distill_credit_cost))}" /></div>
-          <div class="field"><label>注册赠送蒸馏次数</label><input id="pfDistillGift" type="number" min="0" value="${escapeHtml(String(platform.distill_ticket_gift == null ? 0 : platform.distill_ticket_gift))}" /></div>
         </div>
         <div class="toggle-row">
           <div class="tt"><b>启用平台模型</b><span>关闭后未配置 Key 的用户将无法获得回复</span></div>
@@ -1570,7 +1569,6 @@
             new_user_gift: Number($("pfGift").value) || 0,
             default_credit_days: Number($("pfDefaultDays").value) || 30,
             distill_credit_cost: Number($("pfDistillCost").value) || 0,
-            distill_ticket_gift: Number($("pfDistillGift").value) || 0,
           };
           const key = $("pfKey").value.trim();
           if (key) payload.api_key = key;

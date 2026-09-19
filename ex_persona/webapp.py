@@ -1276,7 +1276,6 @@ class PlatformConfigRequest(BaseModel):
     default_credit_days: int | None = None
     distill_credit_cost: int | None = None
     distill_ticket_price: int | None = None
-    distill_ticket_gift: int | None = None
 
 
 class CreditGrantRequest(BaseModel):
@@ -1598,13 +1597,6 @@ def register(payload: Credentials, request: Request) -> JSONResponse:
         store.grant_credits(
             user["id"], platform.new_user_gift, reason="新用户注册赠送", actor="system",
             ref="register", expires_days=platform.default_credit_days, source="gift",
-        )
-    if platform.distill_ticket_gift > 0 and platform.distill_credit_cost > 0:
-        store.grant_credits(
-            user["id"], platform.distill_ticket_gift * platform.distill_credit_cost,
-            reason="新用户注册赠送（蒸馏积分）", actor="system",
-            ref="register-distill", expires_days=platform.default_credit_days,
-            source="gift", idem="register-distill",
         )
     return _login_response(user, request)
 
@@ -4670,7 +4662,6 @@ def admin_get_platform(admin: dict = Depends(current_admin)) -> dict:
         "default_credit_days": platform.default_credit_days,
         "distill_credit_cost": platform.distill_credit_cost,
         "distill_ticket_price": platform.distill_ticket_price,
-        "distill_ticket_gift": platform.distill_ticket_gift,
         "has_key": bool(row.get("api_key_encrypted")),
         "api_key_masked": crypto.mask(platform.api_key) if platform.api_key else "",
         "daily_limit": platform.daily_limit,
@@ -4711,23 +4702,19 @@ def admin_set_platform(
         max(int(payload.distill_ticket_price), 0) if payload.distill_ticket_price is not None
         else int(row.get("distill_ticket_price") or 0)
     )
-    distill_ticket_gift = (
-        max(int(payload.distill_ticket_gift), 0) if payload.distill_ticket_gift is not None
-        else int(row.get("distill_ticket_gift") or 0)
-    )
     store.set_platform_config(
         encrypted, base_url, model, enabled, per_turn_cost, new_user_gift,
         default_credit_days=default_credit_days,
         distill_credit_cost=distill_credit_cost,
         distill_ticket_price=distill_ticket_price,
-        distill_ticket_gift=distill_ticket_gift,
+        # 「注册赠送蒸馏次数」已并入 new_user_gift，这里固定归零以保持退役状态。
+        distill_ticket_gift=0,
     )
     _agents.clear()
     _audit(
         admin, "platform.update",
         detail=(f"model={model} enabled={enabled} cost={per_turn_cost} gift={new_user_gift}"
-                f" days={default_credit_days} distill={distill_credit_cost}"
-                f" ticket_gift={distill_ticket_gift}"),
+                f" days={default_credit_days} distill={distill_credit_cost}"),
     )
     return admin_get_platform(admin)
 

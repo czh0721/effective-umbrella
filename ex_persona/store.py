@@ -698,6 +698,7 @@ def init_db() -> None:
             _migrate_package_tiers(conn)
             _migrate_retire_entry_package(conn)
             _migrate_distill_credits(conn)
+            _migrate_merge_distill_gift(conn)
             seed_at = utcnow()
             conn.executemany(
                 "INSERT OR IGNORE INTO feature_flags (key, value, updated_at, updated_by)"
@@ -898,6 +899,38 @@ def _migrate_distill_credits(conn: sqlite3.Connection) -> None:
             (cost, now),
         )
     _meta_set(conn, "distill_credits_v1", "1")
+
+
+def _migrate_merge_distill_gift(conn: sqlite3.Connection) -> None:
+    """一次性把「注册赠送蒸馏次数」合并进「注册赠送积分」（幂等，只执行一次）。
+
+    蒸馏券取消后，注册赠送统一走积分。这里把原 ``distill_ticket_gift`` 次数按蒸馏
+    积分单价折算后累加到 ``new_user_gift``，并把 ``distill_ticket_gift`` 归零，避免
+    后台同时存在两条赠送入口；用 ``schema_meta`` 标记保证只执行一次。
+    """
+    if _meta_get(conn, "distill_gift_merged_v1") == "1":
+        return
+    row = conn.execute(
+        "SELECT new_user_gift, distill_ticket_gift, distill_credit_cost"
+        " FROM platform_config WHERE id = 1"
+    ).fetchone()
+    if row is not None:
+        gift = max(int(row["distill_ticket_gift"] or 0), 0)
+        cost = int(row["distill_credit_cost"] or 0) or DISTILL_CREDIT_COST_DEFAULT
+        now = utcnow()
+        if gift > 0 and cost > 0:
+            conn.execute(
+                "UPDATE platform_config SET new_user_gift = new_user_gift + ?,"
+                " distill_ticket_gift = 0, updated_at = ? WHERE id = 1",
+                (gift * cost, now),
+            )
+        elif gift:
+            conn.execute(
+                "UPDATE platform_config SET distill_ticket_gift = 0, updated_at = ?"
+                " WHERE id = 1",
+                (now,),
+            )
+    _meta_set(conn, "distill_gift_merged_v1", "1")
 
 
 def _meta_get(conn: sqlite3.Connection, key: str) -> str:

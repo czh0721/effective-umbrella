@@ -43,8 +43,8 @@ class PlatformConfig:
     distill_credit_cost: int = 100
     # 单张蒸馏券的念念币价格；0 表示免费（历史字段，已不再用于计价）。
     distill_ticket_price: int = 60
-    # 新用户注册赠送的蒸馏券数量；0 表示不赠送。
-    # 蒸馏券取消后，该数量按蒸馏积分单价折算为等值积分发放。
+    # 历史字段（已退役）：原「注册赠送蒸馏次数」。
+    # 蒸馏券取消后已并入 new_user_gift，保留列以兼容历史数据与迁移幂等。
     distill_ticket_gift: int = 0
 
     @property

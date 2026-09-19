@@ -42,12 +42,22 @@ class DistillCreditApiTest(unittest.TestCase):
 
     def test_no_ticket_copy_in_frontend(self):
         web_root = Path(__file__).resolve().parents[1] / "web"
+        for name in ("admin.html", "settings.html", "create_distill.html", "agent.html"):
+            self.assertNotIn("蒸馏券", (web_root / name).read_text(encoding="utf-8"), name)
         offenders = [
             str(path.relative_to(web_root))
             for path in sorted(web_root.rglob("*.html"))
             if "蒸馏券" in path.read_text(encoding="utf-8")
         ]
         self.assertEqual(offenders, [])
+
+    def test_registration_grants_single_credit_payload(self):
+        with TestClient(app) as client:
+            user = self._register(client, "register-single-gift")
+        reasons = [item["reason"] for item in store.list_credit_ledger(user["id"], limit=10)]
+        self.assertIn("新用户注册赠送", reasons)
+        self.assertFalse(any("蒸馏" in reason for reason in reasons), reasons)
+        self.assertEqual(store.get_credits(user["id"]), 100)
 
 
 if __name__ == "__main__":

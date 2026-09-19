@@ -1,6 +1,27 @@
+import contextlib
 import os
 import tempfile
 import unittest
+
+
+@contextlib.contextmanager
+def _isolated_db_path():
+    old = os.environ.get("PERSONA_DB_PATH")
+    handle = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    handle.close()
+    os.environ["PERSONA_DB_PATH"] = handle.name
+    store._initialized = False
+    try:
+        store.init_db()
+        yield
+    finally:
+        if old is None:
+            os.environ.pop("PERSONA_DB_PATH", None)
+        else:
+            os.environ["PERSONA_DB_PATH"] = old
+        store._initialized = False
+        store.init_db()
+
 
 _TMP = tempfile.TemporaryDirectory()
 os.environ["PERSONA_DATA_DIR"] = _TMP.name
@@ -113,6 +134,32 @@ class DistillCreditTest(unittest.TestCase):
         )
         self.assertEqual(updated["bonus_tickets"], 0)
         self.assertEqual(updated["bonus_credits"], 2 * cost)
+
+    def _seed_gift_then_migrate(self, new_user_gift, gift, cost):
+        store.set_platform_config(
+            "", "", "deepseek-chat", True, 20, new_user_gift,
+            default_credit_days=30, distill_credit_cost=cost,
+            distill_ticket_price=60, distill_ticket_gift=gift,
+        )
+        with store.connect() as conn:
+            conn.execute("DELETE FROM schema_meta WHERE key = 'distill_gift_merged_v1'")
+        store._initialized = False
+        store.init_db()
+        return store.get_platform_config_row()
+
+    def test_migration_merges_registration_distill_gift(self):
+        with _isolated_db_path():
+            row = self._seed_gift_then_migrate(100, 1, 100)
+            self.assertEqual(int(row["new_user_gift"]), 200)
+            self.assertEqual(int(row["distill_ticket_gift"]), 0)
+
+    def test_merge_gift_migration_is_idempotent(self):
+        with _isolated_db_path():
+            row = self._seed_gift_then_migrate(100, 2, 100)
+            self.assertEqual(int(row["new_user_gift"]), 300)
+            store._initialized = False
+            store.init_db()
+            self.assertEqual(int(store.get_platform_config_row()["new_user_gift"]), 300)
 
 
 if __name__ == "__main__":
