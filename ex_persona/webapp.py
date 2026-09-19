@@ -1782,6 +1782,22 @@ def me(user: dict = Depends(current_user)) -> dict:
     }
 
 
+# 头像数据上限：与前端 256×256 JPEG 压缩结果匹配，避免超大 base64 进入数据库。
+AVATAR_MAX_CHARS = 400_000
+
+
+def _validate_avatar(value: str) -> str:
+    """校验头像数据，空串表示清除头像。"""
+    data = (value or "").strip()
+    if not data:
+        return ""
+    if not data.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="头像格式不正确")
+    if len(data) > AVATAR_MAX_CHARS:
+        raise HTTPException(status_code=400, detail="头像图片过大，请换一张")
+    return data
+
+
 @app.post("/api/profile")
 def update_profile(payload: ProfileRequest, user: dict = Depends(current_user)) -> dict:
     nickname = None
@@ -1791,12 +1807,7 @@ def update_profile(payload: ProfileRequest, user: dict = Depends(current_user)) 
         if len(nickname) > 20:
             raise HTTPException(status_code=400, detail="昵称最多 20 个字")
     if payload.avatar is not None:
-        avatar = payload.avatar.strip()
-        if avatar:
-            if not avatar.startswith("data:image/"):
-                raise HTTPException(status_code=400, detail="头像格式不正确")
-            if len(avatar) > 400_000:
-                raise HTTPException(status_code=400, detail="头像图片过大，请换一张")
+        avatar = _validate_avatar(payload.avatar)
     store.set_user_profile(user["id"], nickname=nickname, avatar=avatar)
     return {"ok": True, "user": _public_user(store.get_user(user["id"]) or user)}
 
@@ -2184,7 +2195,7 @@ def update_persona(persona_id: int, payload: PersonaUpdate, user: dict = Depends
     if payload.tag is not None:
         fields["tag"] = payload.tag.strip()
     if payload.avatar is not None:
-        fields["avatar"] = payload.avatar.strip()
+        fields["avatar"] = _validate_avatar(payload.avatar)
     if fields:
         store.update_persona(user["id"], persona_id, **fields)
     _agents.pop(f"{user['id']}:{persona_id}", None)

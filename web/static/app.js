@@ -379,6 +379,41 @@ function fmtDate(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+/* --------------------------------------------------------- avatar -- */
+function avatarImgMarkup(avatar) {
+  const src = String(avatar || "").trim();
+  if (!src) return "";
+  return '<img src="' + escapeHtml(src) + '" alt="" />';
+}
+
+function compressAvatarFile(file, size = 256) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext("2d");
+          const scale = Math.max(size / image.width, size / image.height);
+          const w = image.width * scale;
+          const h = image.height * scale;
+          ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
+          resolve(canvas.toDataURL("image/jpeg", 0.86));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      image.onerror = () => reject(new Error("图片读取失败，请换一张"));
+      image.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error("图片读取失败，请换一张"));
+    reader.readAsDataURL(file);
+  });
+}
+
 /* --------------------------------------------------------- modal/sheet -- */
 function focusFirst(mask) {
   const items = focusableItems(mask);

@@ -109,7 +109,9 @@
       host.innerHTML = `
         <section class="glass card">
           <div class="row">
-            <div class="avatar" style="background:${gradientFor(detail.persona.id)}">${initials(detail.persona.name)}</div>
+            ${detail.persona.avatar
+              ? `<div class="avatar">${avatarImgMarkup(detail.persona.avatar)}</div>`
+              : `<div class="avatar" style="background:${gradientFor(detail.persona.id)}">${initials(detail.persona.name)}</div>`}
             <div class="flex1">
               <b style="font-size:17px">${escapeHtml(detail.persona.name)}</b>
               <div class="row" style="gap:6px;margin-top:2px">
@@ -369,7 +371,14 @@
       const user = card.user || {};
       const soul = card.soul || {};
       const memories = (card.memories || []).map((m) => [m.time, m.title, m.detail].map((x) => x || "").join(" | ")).join("\n");
+      let avatarData = null;
+      let avatarReset = false;
       openSheet("手动编辑人设", "逐项修改身份档案", `
+        <div class="profile-edit-head">
+          <button class="avatar avatar-lg" id="eAvatar" type="button" aria-label="更换头像"></button>
+          <div class="mini">点击更换头像 · <a href="javascript:void(0)" id="eAvatarReset">恢复默认</a></div>
+          <input type="file" id="eAvatarFile" accept="image/*" hidden />
+        </div>
         <div class="split"><div class="field"><label>姓名</label><input id="eName" value="${escapeHtml(identity.name || detail.persona.name)}" /></div>
         <div class="field"><label>性别</label><input id="eGender" value="${escapeHtml(identity.gender || "")}" /></div></div>
         <div class="split"><div class="field"><label>生日</label><input id="eBirthday" value="${escapeHtml(identity.birthday || "")}" /></div>
@@ -383,6 +392,33 @@
         <div class="field"><label>共同回忆（每行：时间 | 标题 | 描述）</label><textarea id="eMemories" placeholder="2019 | 初见 | 在书店认识">${escapeHtml(memories)}</textarea></div>
         <div class="btnrow"><button class="btn primary wide" id="eSave">保存</button></div>`,
         (body, mask) => {
+          const av = body.querySelector("#eAvatar");
+          const file = body.querySelector("#eAvatarFile");
+          const paintAvatar = (avatar) => {
+            if (avatar) {
+              av.style.background = "";
+              av.innerHTML = avatarImgMarkup(avatar);
+            } else {
+              av.style.background = gradientFor(detail.persona.id);
+              av.textContent = (detail.persona.name || "?").slice(0, 1);
+            }
+          };
+          paintAvatar(detail.persona.avatar || "");
+          av.onclick = () => file.click();
+          file.onchange = async () => {
+            if (!file.files || !file.files[0]) return;
+            try {
+              avatarData = await compressAvatarFile(file.files[0]);
+              avatarReset = false;
+              paintAvatar(avatarData);
+            } catch (error) { toast(error.message); }
+          };
+          body.querySelector("#eAvatarReset").onclick = () => {
+            avatarData = null;
+            avatarReset = true;
+            file.value = "";
+            paintAvatar("");
+          };
           body.querySelector("#eSave").onclick = async () => {
             const split = (value) => value.split(/[，,、\n]/).map((x) => x.trim()).filter(Boolean);
             const lines = body.querySelector("#eMemories").value.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -391,16 +427,19 @@
               return { time: time || "", title: title || "", detail: text || "" };
             });
             const name = body.querySelector("#eName").value.trim();
+            const payload = {
+              name,
+              card: {
+                identity: { name, gender: body.querySelector("#eGender").value.trim(), birthday: body.querySelector("#eBirthday").value.trim(), age: body.querySelector("#eAge").value.trim(), hometown: body.querySelector("#eHometown").value.trim(), education: body.querySelector("#eEducation").value.trim() },
+                user: { relationship: body.querySelector("#eRelation").value.trim(), met_time: body.querySelector("#eMet").value.trim() },
+                soul: { speaking_style: split(body.querySelector("#eStyle").value), catchphrases: split(body.querySelector("#ePhrases").value) },
+                memories: memoriesOut,
+              },
+            };
+            if (avatarReset) payload.avatar = "";
+            else if (avatarData) payload.avatar = avatarData;
             try {
-              detail = await api(`/api/personas/${personaId}`, { method: "PATCH", body: JSON.stringify({
-                name,
-                card: {
-                  identity: { name, gender: body.querySelector("#eGender").value.trim(), birthday: body.querySelector("#eBirthday").value.trim(), age: body.querySelector("#eAge").value.trim(), hometown: body.querySelector("#eHometown").value.trim(), education: body.querySelector("#eEducation").value.trim() },
-                  user: { relationship: body.querySelector("#eRelation").value.trim(), met_time: body.querySelector("#eMet").value.trim() },
-                  soul: { speaking_style: split(body.querySelector("#eStyle").value), catchphrases: split(body.querySelector("#ePhrases").value) },
-                  memories: memoriesOut,
-                },
-              }) });
+              detail = await api(`/api/personas/${personaId}`, { method: "PATCH", body: JSON.stringify(payload) });
               closeModal(mask); render(); toast("已保存");
             } catch (error) { toastErr(error); }
           };

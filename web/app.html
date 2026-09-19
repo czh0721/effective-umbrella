@@ -58,7 +58,9 @@
       else if (!active) { sub = "切换为当前使用后由 ta 回复微信"; }
       return `<section class="glass agent-card fade-in${active ? " active" : ""}" style="--i:${index}" data-id="${persona.id}">
         <div class="head">
-          <div class="avatar" style="background:${gradientFor(persona.id)}">${initials(persona.name)}</div>
+          ${persona.avatar
+            ? `<div class="avatar">${avatarImgMarkup(persona.avatar)}</div>`
+            : `<div class="avatar" style="background:${gradientFor(persona.id)}">${initials(persona.name)}</div>`}
           <div class="flex1">
             <div class="row" style="gap:8px"><b style="font-size:15.5px">${escapeHtml(persona.name)}</b>${activeBadge}${badge}</div>
             <div class="mini">${escapeHtml(sub)}</div>

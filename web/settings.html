@@ -303,28 +303,7 @@
     }
 
     function readAvatar(file) {
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const image = new Image();
-          image.onload = () => {
-            const size = 256;
-            const canvas = document.createElement("canvas");
-            canvas.width = size;
-            canvas.height = size;
-            const ctx = canvas.getContext("2d");
-            const scale = Math.max(size / image.width, size / image.height);
-            const w = image.width * scale;
-            const h = image.height * scale;
-            ctx.drawImage(image, (size - w) / 2, (size - h) / 2, w, h);
-            resolve(canvas.toDataURL("image/jpeg", 0.86));
-          };
-          image.onerror = () => reject(new Error("图片读取失败，请换一张"));
-          image.src = reader.result;
-        };
-        reader.onerror = () => reject(new Error("图片读取失败，请换一张"));
-        reader.readAsDataURL(file);
-      });
+      return compressAvatarFile(file);
     }
 
     function openProfileEditor(user) {
