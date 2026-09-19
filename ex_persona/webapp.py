@@ -4007,6 +4007,8 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
         reply, media_directives = media_reply.parse_reply(reply, allowed_kinds)
         reply = _clean_outbound(reply)
         reply = _apply_filter(reply, settings)
+        # 只有正文没有文字、但确实会发出表情/图片时，仍算一次成功回复，不能退款。
+        media_delivered = bool(media_directives and stickers and contact)
         capped = False
         if reply and not _quota_ok(user_id, settings):
             observability.METRICS.inc("reply.capped")
@@ -4040,6 +4042,10 @@ def route_chat(bridge_token: str, request: OAIRequest) -> dict:
                     store.add_turn(user_id, persona["id"], "assistant", reply, contact=contact)
                     if contact:
                         _start_extract(user_id, persona, contact)
+                elif media_delivered:
+                    # 纯表情/图片回复：正文为空但媒体会照常发出，属于成功回复，
+                    # 不退款也不提示"没发出内容"（否则用户白拿一次发送）。
+                    observability.METRICS.inc("reply.media_only")
                 else:
                     # 没有可发送的内容（乱码丢弃 / 频率上限 / 静默）：不算一次成功
                     # 回复，退回本轮扣费，也不能把空回复写进缓存。

@@ -390,6 +390,47 @@ class BillingPathTest(unittest.TestCase):
                 self.assertEqual(len(calls), 1)
                 self.assertEqual(store.get_credits(user["id"]), start - 2)
 
+    def test_media_only_reply_charged_not_refunded(self):
+        import json as _json
+
+        from ex_persona import webapp as webapp_module
+
+        with _isolated_db():
+            with TestClient(app) as client:
+                user, persona = self._setup_chat(client, "token-media-only", "表情", 2, 100)
+                upload = client.post(
+                    f"/api/personas/{persona['id']}/stickers",
+                    files={"file": ("cute.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+                )
+                self.assertEqual(upload.status_code, 200, upload.text)
+                store.update_persona(
+                    user["id"], persona["id"],
+                    settings=_json.dumps({"advanced": {"reply_sticker": True}}),
+                )
+                start = store.get_credits(user["id"])
+                calls: list = []
+                queued: list = []
+                original_queue = webapp_module._queue_media_replies
+                restore_agent = self._patch_agent("[[STICKER:1]]", calls)
+                webapp_module._queue_media_replies = (
+                    lambda uid, p, c, s, d: (queued.append(d) or len(d))
+                )
+                try:
+                    response = client.post(
+                        "/v1/chat/completions/token-media-only",
+                        json={"user": "c1", "messages": [{"role": "user", "content": "在吗"}]},
+                    )
+                finally:
+                    webapp_module.get_agent = restore_agent
+                    webapp_module._queue_media_replies = original_queue
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["choices"][0]["message"]["content"], "")
+                self.assertTrue(queued, "纯表情回复也要把表情排进发送队列")
+                self.assertEqual(
+                    store.get_credits(user["id"]), start - 2,
+                    "表情已经发出，属于成功回复，不能把本轮积分退回",
+                )
+
     def test_reply_cache_not_charged_twice(self):
         with _isolated_db():
             with TestClient(app) as client:
