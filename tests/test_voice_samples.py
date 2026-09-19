@@ -106,6 +106,24 @@ class VoiceSampleApiTest(unittest.TestCase):
             response = self._post(client, "missing-token")
             self.assertEqual(response.status_code, 404, response.text)
 
+    def test_skips_disabled_account_and_inactive_persona(self):
+        with TestClient(app) as client:
+            user, persona, token = self._prepare(client)
+            store.set_user_status(user["id"], "disabled")
+            response = self._post(client, token, message_id="disabled-1")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json().get("skipped"))
+            self.assertEqual(response.json()["reason"], "account_disabled")
+            self.assertEqual(store.list_voice_samples(user["id"], persona["id"], "contact-1"), [])
+
+            store.set_user_status(user["id"], "active")
+            store.update_persona(user["id"], persona["id"], status="retired", is_active=0)
+            response = self._post(client, token, message_id="retired-1")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json().get("skipped"))
+            self.assertEqual(response.json()["reason"], "persona_inactive")
+            self.assertEqual(store.list_voice_samples(user["id"], persona["id"], "contact-1"), [])
+
     def test_keeps_latest_twenty(self):
         with TestClient(app) as client:
             user, persona, token = self._prepare(client)

@@ -2348,6 +2348,25 @@ def public_sticker(sticker_id: int, token: str = "") -> FileResponse:
     return FileResponse(path)
 
 
+def _bridge_inactive_reason(binding: dict) -> str:
+    """桥接账号/人格不可用时返回跳过原因，可用时返回空串。
+
+    与 ``route_chat`` 保持一致：账号停用/注销或人格 retired/disabled 时不再受理
+    入站媒体，避免给已停用的账号继续写入表情素材或语音样本。
+    """
+    user_id = int(binding["user_id"])
+    owner = store.get_user(user_id)
+    if owner is None or (owner.get("status") or "active") != "active":
+        return "account_disabled"
+    persona = (
+        store.get_persona(user_id, binding["persona_id"])
+        if binding.get("persona_id") else None
+    ) or store.get_active_persona(user_id)
+    if persona is not None and persona.get("status") in ("retired", "disabled"):
+        return "persona_inactive"
+    return ""
+
+
 @app.post("/api/wechat/media/{bridge_token}")
 async def wechat_media(bridge_token: str, request: Request) -> dict:
     """微信桥接回调：把聊天框里收到的图片/表情保存为对应人格的表情包素材。"""
@@ -2358,6 +2377,10 @@ async def wechat_media(bridge_token: str, request: Request) -> dict:
     binding = store.get_binding_by_token(bridge_token)
     if binding is None:
         raise HTTPException(status_code=404, detail="无效的桥接令牌")
+    reason = _bridge_inactive_reason(binding)
+    if reason:
+        observability.METRICS.inc(f"bridge.media.{reason}")
+        return {"ok": True, "skipped": True, "reason": reason}
     user_id = binding["user_id"]
     persona = store.get_persona(user_id, binding["persona_id"]) if binding.get("persona_id") else None
     persona = persona or store.get_active_persona(user_id)
@@ -2396,6 +2419,10 @@ async def wechat_voice(bridge_token: str, request: Request) -> dict:
     binding = store.get_binding_by_token(bridge_token)
     if binding is None:
         raise HTTPException(status_code=404, detail="无效的桥接令牌")
+    reason = _bridge_inactive_reason(binding)
+    if reason:
+        observability.METRICS.inc(f"bridge.voice.{reason}")
+        return {"ok": True, "skipped": True, "reason": reason}
     user_id = binding["user_id"]
     persona = store.get_persona(user_id, binding["persona_id"]) if binding.get("persona_id") else None
     persona = persona or store.get_active_persona(user_id)

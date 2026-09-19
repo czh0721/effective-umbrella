@@ -1114,6 +1114,39 @@ class PlatformTest(unittest.TestCase):
             saved = client.get(f"/api/personas/{persona['id']}/channel").json()
             self.assertEqual(saved["wechat"]["contact"], "peer9@im.wechat")
 
+    def test_wechat_media_skips_inactive_account(self):
+        with TestClient(app) as client:
+            user = self._register(client, "media-disabled")
+            persona = client.post("/api/personas", json={"name": "停用"}).json()["persona"]
+            binding = store.upsert_wechat_binding(
+                user["id"],
+                bridge_token="media-disabled-token",
+                home_dir=str(workspace.home_dir(user["id"])),
+                persona_id=persona["id"],
+            )
+            token = binding["bridge_token"]
+
+            store.set_user_status(user["id"], "disabled")
+            response = client.post(
+                f"/api/wechat/media/{token}",
+                files={"file": ("gift.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json().get("skipped"))
+            self.assertEqual(response.json()["reason"], "account_disabled")
+            self.assertEqual(store.list_stickers(user["id"], persona["id"]), [])
+
+            store.set_user_status(user["id"], "active")
+            store.update_persona(user["id"], persona["id"], status="retired", is_active=0)
+            response = client.post(
+                f"/api/wechat/media/{token}",
+                files={"file": ("gift2.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json().get("skipped"))
+            self.assertEqual(response.json()["reason"], "persona_inactive")
+            self.assertEqual(store.list_stickers(user["id"], persona["id"]), [])
+
     def test_channel_contact(self):
         with TestClient(app) as client:
             self._register(client, "channel-user")
