@@ -129,6 +129,13 @@ class VoiceUiContractTest(unittest.TestCase):
         self.assertIn("/api/personas/{persona_id}/voice/samples", source)
         self.assertIn("sample_upload", source)
 
+    def test_agent_voice_module_disabled_by_default(self):
+        text = (WEB_ROOT / "agent.html").read_text(encoding="utf-8")
+        self.assertIn("const VOICE_MODULE_ENABLED = false;", text)
+        self.assertIn('VOICE_MODULE_ENABLED ? row("voice"', text)
+        self.assertIn('VOICE_MODULE_ENABLED ? switchRow("允许语音回复"', text)
+        self.assertIn("VOICE_MODULE_ENABLED ? body.querySelector(\"#fVoice\").checked", text)
+
 
 class AdminConsoleStructureTest(unittest.TestCase):
     def setUp(self):

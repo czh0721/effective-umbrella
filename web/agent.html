@@ -30,6 +30,8 @@
     let debugHistory = [];
     let lastDebug = null;
     let debugBusy = false;
+    // 语音模块暂时下线，后期恢复时改回 true 即可（后台总开关同时需开启）。
+    const VOICE_MODULE_ENABLED = false;
 
     function toastErr(error) {
       const message = error.message || String(error);
@@ -159,7 +161,7 @@
             ${row("tuning", "sliders", "人格调校", tuningText, "var(--pink)")}
             ${row("advanced", "sliders", "消息与回复", "合并 · 分段 · 输入中 · 沉默", "#8e8e99")}
             ${row("stickers", "sticker", "图片表情包", (detail.stickers || []).length ? `${detail.stickers.length} 个` : "还没有表情包", "var(--v2)")}
-            ${row("voice", "mic", "语音", (s.advanced || {}).reply_voice ? "语音回复已开启" : "未开启", "var(--blue)")}
+            ${VOICE_MODULE_ENABLED ? row("voice", "mic", "语音", (s.advanced || {}).reply_voice ? "语音回复已开启" : "未开启", "var(--blue)") : ""}
           </div>
         </section>
 
@@ -1027,7 +1029,7 @@
         ${switchRow("允许图片回复", "", a.reply_image, 'id="fImage"')}
         ${switchRow("允许表情包回复", "", a.reply_sticker, 'id="fSticker"')}
         ${switchRow("回应收到图片", "对方发来图片时也回一句", a.reply_to_images, 'id="fReplyImage"')}
-        ${switchRow("允许语音回复", "", a.reply_voice, 'id="fVoice"')}
+        ${VOICE_MODULE_ENABLED ? switchRow("允许语音回复", "", a.reply_voice, 'id="fVoice"') : ""}
         ${switchRow("允许沉默", "人设写了「不想说话」时可以不回复", a.allow_silence, 'id="fSilence"')}
         ${switchRow("独立会话", "每个聊天对象各自独立上下文，不会串台", a.independent_session, 'id="fIndependent"')}
         <div class="btnrow"><button class="btn primary wide" id="fSave">保存</button></div>`,
@@ -1041,7 +1043,7 @@
               reply_image: body.querySelector("#fImage").checked,
               reply_sticker: body.querySelector("#fSticker").checked,
               reply_to_images: body.querySelector("#fReplyImage").checked,
-              reply_voice: body.querySelector("#fVoice").checked,
+              reply_voice: VOICE_MODULE_ENABLED ? body.querySelector("#fVoice").checked : Boolean(a.reply_voice),
               allow_silence: body.querySelector("#fSilence").checked,
               independent_session: body.querySelector("#fIndependent").checked,
             } });
